@@ -13,7 +13,7 @@
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.22.3",
     "lucide-react": "^0.344.0",
-    "@google/genai": "^0.1.0",
+    "@google/genai": "^0.2.1",
     "pdf-lib": "^1.17.1",
     "jszip": "^3.10.1",
     "mammoth": "^1.6.0",
@@ -21,6 +21,7 @@
     "pdfjs-dist": "3.11.174"
   },
   "devDependencies": {
+    "@types/node": "^20.11.24",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
     "@vitejs/plugin-react": "^4.2.1",
