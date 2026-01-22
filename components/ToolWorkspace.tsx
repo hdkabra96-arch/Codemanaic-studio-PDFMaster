@@ -54,7 +54,6 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
     try {
       let resultBlob: Blob | null = null;
       let resultName = 'download.pdf';
-      const apiKey = process.env.API_KEY;
 
       const progressInterval = setInterval(() => {
         setProgress(prev => Math.min(prev + 5, 90));
@@ -134,9 +133,8 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
         // --- AI Powered or Complex Conversions ---
 
         case 'pdf-to-word': {
-          if (!apiKey) throw new Error("API Key required.");
           const base64 = await fileToGenerativePart(files[0].file);
-          const htmlDoc = await convertPDFToDoc(base64, apiKey);
+          const htmlDoc = await convertPDFToDoc(base64);
           resultBlob = new Blob([htmlDoc], { type: 'application/msword' });
           resultName = files[0].file.name.replace(/\.pdf$/i, '.doc');
           break;
@@ -147,9 +145,8 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
           // Both use the same OCR logic initially, but output might differ. 
           // For OCR-to-PDF, we generate a DOC and let user save as PDF (via print) or return HTML that html2pdf converts.
           // Let's return a DOC for jpg-to-word, and a PDF for ocr-to-pdf.
-          if (!apiKey) throw new Error("API Key required.");
           const base64 = await fileToGenerativePart(files[0].file);
-          const htmlContent = await convertJPGToWordOCR(base64, files[0].file.type, apiKey);
+          const htmlContent = await convertJPGToWordOCR(base64, files[0].file.type);
           
           if (tool.id === 'ocr-to-pdf') {
              const element = document.createElement('div');
@@ -166,18 +163,16 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
         
         case 'pdf-to-ocr': {
            // Extract text
-           if (!apiKey) throw new Error("API Key required.");
            const base64 = await fileToGenerativePart(files[0].file);
-           const cleanHtml = await cleanWatermark(base64, apiKey); // Reuse clean function to get text
+           const cleanHtml = await cleanWatermark(base64); // Reuse clean function to get text
            resultBlob = new Blob([cleanHtml], { type: 'text/html' });
            resultName = 'extracted_text.html';
            break;
         }
 
         case 'pdf-to-excel': {
-          if (!apiKey) throw new Error("API Key required.");
           const base64 = await fileToGenerativePart(files[0].file);
-          const jsonData = await convertPDFToExcel(base64, apiKey);
+          const jsonData = await convertPDFToExcel(base64);
           
           const wb = XLSX.utils.book_new();
           if (jsonData.tables?.length > 0) {
@@ -197,10 +192,9 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
 
         case 'excel-to-pdf':
         case 'ppt-to-pdf': {
-           if (!apiKey) throw new Error("API Key required for conversion.");
            const base64 = await fileToGenerativePart(files[0].file);
            // Use AI to render a print view of the office file
-           const htmlView = await convertOfficeToHtml(base64, files[0].file.type, apiKey);
+           const htmlView = await convertOfficeToHtml(base64, files[0].file.type);
            
            const element = document.createElement('div');
            element.innerHTML = `
@@ -214,9 +208,8 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
         }
 
         case 'remove-watermark': {
-           if (!apiKey) throw new Error("API Key required.");
            const base64 = await fileToGenerativePart(files[0].file);
-           const cleanHtml = await cleanWatermark(base64, apiKey);
+           const cleanHtml = await cleanWatermark(base64);
            // Convert back to PDF
            const element = document.createElement('div');
            element.innerHTML = cleanHtml;
@@ -273,14 +266,8 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
     setIsThinking(true);
 
     try {
-      const apiKey = process.env.API_KEY;
-      if (!apiKey) {
-         setChatMessages(prev => [...prev, { id: 'err', role: 'model', text: "API Key missing.", timestamp: Date.now() }]);
-         setIsThinking(false);
-         return;
-      }
       const base64 = await fileToGenerativePart(files[0].file);
-      const response = await generatePDFAnalysis(base64, userMsg.text, apiKey);
+      const response = await generatePDFAnalysis(base64, userMsg.text);
 
       setChatMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
@@ -289,7 +276,7 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
         timestamp: Date.now()
       }]);
     } catch (error) {
-      setChatMessages(prev => [...prev, { id: 'err', role: 'model', text: "Error.", timestamp: Date.now() }]);
+      setChatMessages(prev => [...prev, { id: 'err', role: 'model', text: "Error: " + (error as Error).message, timestamp: Date.now() }]);
     } finally {
       setIsThinking(false);
     }

@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Codemanic studio PDFMaster - Intelligent Document Tools</title>
+    <!-- We keep Tailwind CDN for simplicity in migration, though moving to PostCSS is recommended later -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     
@@ -27,14 +28,14 @@
                 200: '#fecdd3',
                 300: '#fda4af',
                 400: '#fb7185',
-                500: '#f43f5e', // Modern Rose/Red
+                500: '#f43f5e',
                 600: '#e11d48',
                 700: '#be123c',
                 800: '#9f1239',
                 900: '#881337',
               },
               accent: {
-                500: '#6366f1', // Indigo for AI
+                500: '#6366f1',
                 600: '#4f46e5',
               }
             },
@@ -90,20 +91,23 @@
   "imports": {
     "react/": "https://esm.sh/react@^19.2.3/",
     "react": "https://esm.sh/react@^19.2.3",
-    "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.37.0",
+    "@google/genai": "https://esm.sh/@google/genai@^1.38.0",
     "react-router-dom": "https://esm.sh/react-router-dom@^7.12.0",
-    "pdf-lib": "https://esm.sh/pdf-lib@^1.17.1",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
+    "xlsx": "https://esm.sh/xlsx@^0.18.5",
     "jszip": "https://esm.sh/jszip@^3.10.1",
-    "mammoth": "https://esm.sh/mammoth@1.6.0",
-    "xlsx": "https://esm.sh/xlsx@0.18.5",
-    "pdfjs-dist": "https://esm.sh/pdfjs-dist@3.11.174"
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
+    "pdfjs-dist": "https://esm.sh/pdfjs-dist@^5.4.530",
+    "vite": "https://esm.sh/vite@^7.3.1",
+    "mammoth": "https://esm.sh/mammoth@^1.11.0",
+    "pdf-lib": "https://esm.sh/pdf-lib@^1.17.1"
   }
 }
 </script>
 </head>
   <body class="bg-slate-50 text-slate-900 antialiased selection:bg-brand-500 selection:text-white">
     <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
   </body>
 </html>

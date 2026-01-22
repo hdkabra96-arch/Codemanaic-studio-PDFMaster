@@ -15,10 +15,8 @@ export const fileToGenerativePart = async (file: File): Promise<string> => {
   });
 };
 
-export const generatePDFAnalysis = async (fileBase64: string, prompt: string, apiKey: string) => {
-  if (!apiKey) throw new Error("API Key is missing");
-
-  const ai = new GoogleGenAI({ apiKey });
+export const generatePDFAnalysis = async (fileBase64: string, prompt: string) => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   try {
     const response = await ai.models.generateContent({
@@ -48,10 +46,8 @@ export const generatePDFAnalysis = async (fileBase64: string, prompt: string, ap
   }
 };
 
-export const convertPDFToDoc = async (fileBase64: string, apiKey: string): Promise<string> => {
-  if (!apiKey) throw new Error("API Key is missing for conversion");
-
-  const ai = new GoogleGenAI({ apiKey });
+export const convertPDFToDoc = async (fileBase64: string): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   // We ask Gemini to convert the PDF content to semantic HTML, which Word opens gracefully as a doc.
   const prompt = `
@@ -94,10 +90,8 @@ export const convertPDFToDoc = async (fileBase64: string, apiKey: string): Promi
   }
 };
 
-export const convertPDFToExcel = async (fileBase64: string, apiKey: string): Promise<any> => {
-  if (!apiKey) throw new Error("API Key is missing for conversion");
-
-  const ai = new GoogleGenAI({ apiKey });
+export const convertPDFToExcel = async (fileBase64: string): Promise<any> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const prompt = `
     Extract all tabular data from the following PDF document.
@@ -140,10 +134,8 @@ export const convertPDFToExcel = async (fileBase64: string, apiKey: string): Pro
   }
 };
 
-export const convertJPGToWordOCR = async (fileBase64: string, mimeType: string, apiKey: string): Promise<string> => {
-  if (!apiKey) throw new Error("API Key is missing for OCR conversion");
-
-  const ai = new GoogleGenAI({ apiKey });
+export const convertJPGToWordOCR = async (fileBase64: string, mimeType: string): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const prompt = `
     Perform high-fidelity OCR on this image. 
@@ -187,10 +179,8 @@ export const convertJPGToWordOCR = async (fileBase64: string, mimeType: string, 
 
 // Generic converter for formats Gemini understands but we want PDF output (via HTML)
 // Useful for complex Excel/PPT conversions if we use the AI to render a print view
-export const convertOfficeToHtml = async (fileBase64: string, mimeType: string, apiKey: string): Promise<string> => {
-  if (!apiKey) throw new Error("API Key is missing for AI conversion");
-
-  const ai = new GoogleGenAI({ apiKey });
+export const convertOfficeToHtml = async (fileBase64: string, mimeType: string): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   // For spreadsheets or presentations, asking for a printable HTML representation is a good strategy
   const prompt = `
@@ -226,10 +216,8 @@ export const convertOfficeToHtml = async (fileBase64: string, mimeType: string, 
   }
 };
 
-export const cleanWatermark = async (fileBase64: string, apiKey: string): Promise<string> => {
-  if (!apiKey) throw new Error("API Key is missing");
-
-  const ai = new GoogleGenAI({ apiKey });
+export const cleanWatermark = async (fileBase64: string): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   const prompt = `
     Reconstruct the text content of this PDF, removing any watermarks or overlay text that obscures the main content.
