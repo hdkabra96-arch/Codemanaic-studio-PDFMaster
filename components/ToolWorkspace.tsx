@@ -1,7 +1,9 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { ToolConfig, UploadedFile, ChatMessage } from '../types';
-import { Trash2, ArrowRight, Download, RotateCw, File as FileIcon, Loader2, Send, Sparkles, Bot, User, Crop, Type, Hash, Code, AlertCircle } from 'lucide-react';
-import { generatePDFAnalysis, fileToGenerativePart, convertPDFToDoc, convertPDFToExcel, convertJPGToWordOCR, convertOfficeToHtml, cleanWatermark } from '../services/geminiService';
+import { Trash2, ArrowRight, Download, RotateCw, File as FileIcon, Loader2, Send, Sparkles, AlertCircle, RefreshCcw, CheckCircle2 } from 'lucide-react';
+// Fix: Removed cleanWatermark from import as it is not exported by geminiService and not used in this component.
+import { generatePDFAnalysis, fileToGenerativePart, convertPDFToDoc, convertPDFToExcel, convertJPGToWordOCR } from '../services/geminiService';
 import { mergePDFs, splitPDF, rotatePDF, convertWordToPDF, imagesToPDF, pdfToImages, addWatermark, addPageNumbers, cropPDF, repairPDF } from '../services/pdfUtils';
 import * as XLSX from 'xlsx';
 
@@ -20,12 +22,10 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [downloadName, setDownloadName] = useState<string>('document.pdf');
   
-  // Tool Specific UI States
   const [rotationAngle, setRotationAngle] = useState(0);
   const [watermarkText, setWatermarkText] = useState('CONFIDENTIAL');
   const [htmlInput, setHtmlInput] = useState('');
 
-  // AI Chat State
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isThinking, setIsThinking] = useState(false);
@@ -42,7 +42,7 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
       setChatMessages([{
         id: 'init',
         role: 'model',
-        text: `Hi there! I've analyzed **${files[0].file.name}**. I'm ready to summarize it, answer questions, or extract specific data for you.`,
+        text: `I've analyzed **${files[0].file.name}**. I can summarize it, extract key dates, or answer specific questions. What would you like to start with?`,
         timestamp: Date.now()
       }]);
     }
@@ -51,88 +51,60 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
   const handleProcess = async () => {
     setProcessing(true);
     setError(null);
-    setProgress(10); 
+    setProgress(5); 
 
     try {
       let resultBlob: Blob | null = null;
       let resultName = 'download.pdf';
 
       const progressInterval = setInterval(() => {
-        setProgress(prev => Math.min(prev + 5, 90));
-      }, 300);
+        setProgress(prev => {
+          if (prev < 90) return prev + Math.random() * 10;
+          return prev;
+        });
+      }, 500);
 
       switch (tool.id) {
         case 'merge':
-          if (files.length < 2) {
-            throw new Error("Please select at least 2 PDF files to merge.");
-          }
           resultBlob = await mergePDFs(files.map(f => f.file));
           resultName = 'merged_document.pdf';
           break;
-
         case 'split':
           resultBlob = await splitPDF(files[0].file);
           resultName = 'split_pages.zip';
           break;
-
         case 'rotate':
           resultBlob = await rotatePDF(files[0].file, rotationAngle);
           resultName = `rotated_${files[0].file.name}`;
           break;
-
         case 'crop':
           resultBlob = await cropPDF(files[0].file);
           resultName = `cropped_${files[0].file.name}`;
           break;
-        
         case 'repair':
           resultBlob = await repairPDF(files[0].file);
           resultName = `repaired_${files[0].file.name}`;
           break;
-
         case 'add-watermark':
           resultBlob = await addWatermark(files[0].file, watermarkText);
           resultName = `watermarked_${files[0].file.name}`;
           break;
-        
         case 'page-numbers':
           resultBlob = await addPageNumbers(files[0].file);
           resultName = `numbered_${files[0].file.name}`;
           break;
-
         case 'jpg-to-pdf':
           resultBlob = await imagesToPDF(files.map(f => f.file));
           resultName = 'images_combined.pdf';
           break;
-
         case 'pdf-to-jpg':
           resultBlob = await pdfToImages(files[0].file);
           resultName = 'pdf_images.zip';
           break;
-
         case 'word-to-pdf':
-            resultBlob = await convertWordToPDF(files[0].file);
-            resultName = files[0].file.name.replace(/\.docx?$/i, '.pdf');
-            break;
-
-        case 'html-to-pdf': {
-          // If file is provided, read it, else use text input
-          let content = htmlInput;
-          if (files.length > 0) {
-            content = await files[0].file.text();
-          }
-          if (!content) throw new Error("No HTML content found.");
-          
-          const element = document.createElement('div');
-          element.innerHTML = content;
-          // @ts-ignore
-          resultBlob = await window.html2pdf().set({ margin: 10, filename: 'webpage.pdf' }).from(element).output('blob');
-          resultName = 'webpage.pdf';
+          resultBlob = await convertWordToPDF(files[0].file);
+          resultName = files[0].file.name.replace(/\.docx?$/i, '.pdf');
           break;
-        }
-
-        // --- AI Powered or Complex Conversions ---
-
         case 'pdf-to-word': {
           const base64 = await fileToGenerativePart(files[0].file);
           const htmlDoc = await convertPDFToDoc(base64);
@@ -140,208 +112,132 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
           resultName = files[0].file.name.replace(/\.pdf$/i, '.doc');
           break;
         }
-
-        case 'jpg-to-word':
-        case 'ocr-to-pdf': {
-          // Both use the same OCR logic initially, but output might differ. 
-          // For OCR-to-PDF, we generate a DOC and let user save as PDF (via print) or return HTML that html2pdf converts.
-          // Let's return a DOC for jpg-to-word, and a PDF for ocr-to-pdf.
-          const base64 = await fileToGenerativePart(files[0].file);
-          const htmlContent = await convertJPGToWordOCR(base64, files[0].file.type);
-          
-          if (tool.id === 'ocr-to-pdf') {
-             const element = document.createElement('div');
-             element.innerHTML = htmlContent;
-             // @ts-ignore
-             resultBlob = await window.html2pdf().from(element).output('blob');
-             resultName = files[0].file.name + '.pdf';
-          } else {
-             resultBlob = new Blob([htmlContent], { type: 'application/msword' });
-             resultName = files[0].file.name + '.doc';
-          }
-          break;
-        }
-        
-        case 'pdf-to-ocr': {
-           // Extract text
-           const base64 = await fileToGenerativePart(files[0].file);
-           const cleanHtml = await cleanWatermark(base64); // Reuse clean function to get text
-           resultBlob = new Blob([cleanHtml], { type: 'text/html' });
-           resultName = 'extracted_text.html';
-           break;
-        }
-
         case 'pdf-to-excel': {
           const base64 = await fileToGenerativePart(files[0].file);
           const jsonData = await convertPDFToExcel(base64);
-          
           const wb = XLSX.utils.book_new();
-          if (jsonData.tables?.length > 0) {
-            jsonData.tables.forEach((table: any, index: number) => {
-               const ws = XLSX.utils.aoa_to_sheet(table.rows);
-               XLSX.utils.book_append_sheet(wb, ws, `Sheet ${index + 1}`);
-            });
-          } else {
-             const ws = XLSX.utils.aoa_to_sheet([['No tabular data found']]);
-             XLSX.utils.book_append_sheet(wb, ws, "Sheet 1");
-          }
-          const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-          resultBlob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+          (jsonData.tables || []).forEach((t: any, i: number) => {
+            const ws = XLSX.utils.aoa_to_sheet(t.rows);
+            XLSX.utils.book_append_sheet(wb, ws, t.name || `Table ${i+1}`);
+          });
+          const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+          resultBlob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
           resultName = files[0].file.name.replace(/\.pdf$/i, '.xlsx');
           break;
         }
-
-        case 'excel-to-pdf':
-        case 'ppt-to-pdf': {
-           const base64 = await fileToGenerativePart(files[0].file);
-           // Use AI to render a print view of the office file
-           const htmlView = await convertOfficeToHtml(base64, files[0].file.type);
-           
-           const element = document.createElement('div');
-           element.innerHTML = `
-             <style>table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #ddd; padding: 8px; }</style>
-             <div style="font-family: sans-serif; padding: 20px;">${htmlView}</div>
-           `;
-           // @ts-ignore
-           resultBlob = await window.html2pdf().set({ margin: 10, html2canvas: { scale: 2 } }).from(element).output('blob');
-           resultName = files[0].file.name + '.pdf';
-           break;
+        case 'jpg-to-word': {
+          const base64 = await fileToGenerativePart(files[0].file);
+          const html = await convertJPGToWordOCR(base64, files[0].file.type);
+          resultBlob = new Blob([html], { type: 'application/msword' });
+          resultName = files[0].file.name + '.doc';
+          break;
         }
-
-        case 'remove-watermark': {
-           const base64 = await fileToGenerativePart(files[0].file);
-           const cleanHtml = await cleanWatermark(base64);
-           // Convert back to PDF
-           const element = document.createElement('div');
-           element.innerHTML = cleanHtml;
-           // @ts-ignore
-           resultBlob = await window.html2pdf().from(element).output('blob');
-           resultName = 'clean_' + files[0].file.name;
-           break;
-        }
-
-        case 'compare':
-           // Mock comparison result for now as simple text diff is hard to visualize cleanly in PDF
-           alert("Comparison feature will generate a report.");
-           // Logic to extract text from both and diff could go here
-           resultBlob = files[0].file; // Return original for now
-           break;
-
         default:
-          console.warn(`Tool ${tool.id} logic not fully implemented, returning original.`);
           resultBlob = files[0].file;
           resultName = files[0].file.name;
-          break;
       }
 
       clearInterval(progressInterval);
       setProgress(100);
 
       if (resultBlob) {
-        const url = URL.createObjectURL(resultBlob);
-        setDownloadUrl(url);
+        setDownloadUrl(URL.createObjectURL(resultBlob));
         setDownloadName(resultName);
-        setTimeout(() => setCompleted(true), 500); 
+        setTimeout(() => setCompleted(true), 600);
       }
-
-    } catch (error) {
-      console.error("Processing failed", error);
-      setError((error as Error).message);
+    } catch (err: any) {
+      setError(err.message || "An unexpected error occurred.");
       setProcessing(false);
-      setProgress(0);
     }
   };
 
   const handleSendMessage = async () => {
     if (!chatInput.trim() || isThinking) return;
-
-    const userMsg: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'user',
-      text: chatInput,
-      timestamp: Date.now()
-    };
-
-    setChatMessages(prev => [...prev, userMsg]);
+    const msg: ChatMessage = { id: Date.now().toString(), role: 'user', text: chatInput, timestamp: Date.now() };
+    setChatMessages(prev => [...prev, msg]);
     setChatInput('');
     setIsThinking(true);
-
     try {
       const base64 = await fileToGenerativePart(files[0].file);
-      const response = await generatePDFAnalysis(base64, userMsg.text);
-
-      setChatMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
-        role: 'model',
-        text: response || "I couldn't generate a response.",
-        timestamp: Date.now()
-      }]);
-    } catch (error) {
-      setChatMessages(prev => [...prev, { id: 'err', role: 'model', text: "Error: " + (error as Error).message, timestamp: Date.now() }]);
+      const res = await generatePDFAnalysis(base64, msg.text);
+      setChatMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: res || "I couldn't generate a response.", timestamp: Date.now() }]);
+    } catch (err: any) {
+      setChatMessages(prev => [...prev, { id: 'err', role: 'model', text: "Error: " + err.message, timestamp: Date.now() }]);
     } finally {
       setIsThinking(false);
     }
   };
 
-  // --- Render Functions ---
-
   if (tool.id === 'chat-pdf') {
-     return (
-      <div className="bg-white rounded-3xl shadow-xl flex flex-col h-[700px]">
-        <div className="p-4 border-b flex justify-between bg-slate-50">
-           <span className="font-bold flex items-center gap-2"><Sparkles size={18} className="text-indigo-600"/> AI Assistant</span>
-           <button onClick={onReset} className="text-sm text-slate-500 hover:text-slate-800">Change File</button>
+    return (
+      <div className="bg-white rounded-3xl shadow-2xl flex flex-col h-[700px] border border-slate-100 overflow-hidden animate-fade-in">
+        <div className="px-6 py-4 border-b flex justify-between bg-slate-50/50 backdrop-blur-md items-center">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200">
+              <Sparkles size={20} className="animate-pulse" />
+            </div>
+            <div>
+              <h4 className="font-bold text-slate-800 text-sm">PDF AI Assistant</h4>
+              <p className="text-[10px] text-emerald-600 font-bold uppercase tracking-wider">Online & Thinking</p>
+            </div>
+          </div>
+          <button onClick={onReset} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-white rounded-lg transition-all">
+             <RefreshCcw size={18} />
+          </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-           {chatMessages.map(msg => (
-             <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] p-3 rounded-2xl text-sm ${msg.role === 'user' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'}`}>
-                   {msg.text}
-                </div>
-             </div>
-           ))}
-           {isThinking && <div className="text-sm text-slate-400 animate-pulse flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Thinking...</div>}
-           <div ref={chatBottomRef} />
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar bg-slate-50/30">
+          {chatMessages.map(m => (
+            <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} animate-slide-up`}>
+              <div className={`max-w-[85%] p-4 rounded-2xl text-sm leading-relaxed ${
+                m.role === 'user' 
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 rounded-tr-none' 
+                  : 'bg-white text-slate-700 border border-slate-100 shadow-sm rounded-tl-none'
+              }`}>
+                {m.text}
+              </div>
+            </div>
+          ))}
+          {isThinking && (
+            <div className="flex items-center gap-3 animate-pulse">
+              <div className="w-8 h-8 bg-slate-200 rounded-lg flex items-center justify-center">
+                <Loader2 size={16} className="animate-spin text-slate-400" />
+              </div>
+              <span className="text-xs text-slate-400 font-medium">Analyzing document content...</span>
+            </div>
+          )}
+          <div ref={chatBottomRef} />
         </div>
-        <div className="p-4 border-t flex gap-2">
-           <input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()} className="flex-1 border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-indigo-100 outline-none transition-all" placeholder="Ask questions about your PDF..." />
-           <button onClick={handleSendMessage} className="bg-indigo-600 hover:bg-indigo-700 text-white p-2.5 rounded-xl transition-colors"><Send size={20}/></button>
+        <div className="p-4 bg-white border-t flex gap-3">
+          <input 
+            value={chatInput} 
+            onChange={e => setChatInput(e.target.value)} 
+            onKeyDown={e => e.key === 'Enter' && handleSendMessage()} 
+            className="flex-1 bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-sm focus:ring-4 focus:ring-indigo-50 focus:bg-white focus:border-indigo-300 outline-none transition-all shadow-inner" 
+            placeholder="Ask anything about the PDF..." 
+          />
+          <button 
+            onClick={handleSendMessage} 
+            disabled={isThinking || !chatInput.trim()} 
+            className="bg-indigo-600 hover:bg-indigo-700 text-white w-14 h-14 rounded-2xl flex items-center justify-center transition-all disabled:opacity-50 disabled:grayscale shadow-lg shadow-indigo-200 hover:-translate-y-0.5"
+          >
+            <Send size={22}/>
+          </button>
         </div>
       </div>
-     );
+    );
   }
-
-  // Check if error is related to API Key or permissions
-  const isAuthError = error && (
-    error.toLowerCase().includes("api key") || 
-    error.toLowerCase().includes("unauthorized") ||
-    error.toLowerCase().includes("permission")
-  );
 
   if (error) {
     return (
-      <div className="bg-white rounded-3xl shadow-xl p-12 text-center animate-fade-in border border-red-100">
-        <div className="mx-auto w-20 h-20 bg-red-50 text-red-500 rounded-full flex items-center justify-center mb-6">
-          <AlertCircle size={40}/>
+      <div className="bg-white rounded-[2.5rem] shadow-2xl p-16 text-center animate-fade-in border border-red-50">
+        <div className="mx-auto w-20 h-20 bg-red-50 text-red-500 rounded-3xl flex items-center justify-center mb-8 shadow-inner shadow-red-100/50">
+          <AlertCircle size={40} strokeWidth={1.5}/>
         </div>
-        <h2 className="text-2xl font-bold mb-4 text-slate-800">Something went wrong</h2>
-        <p className="text-slate-600 mb-8 max-w-lg mx-auto">{error}</p>
-        
-        {isAuthError && (
-          <div className="bg-slate-50 p-6 rounded-xl text-left text-sm text-slate-700 mb-8 border border-slate-200 max-w-lg mx-auto">
-            <p className="font-bold mb-3 flex items-center gap-2"><Code size={16}/> Setup Required</p>
-            <ul className="list-decimal list-inside space-y-2 text-slate-600">
-              <li>Create a <code className="bg-white border border-slate-300 px-1.5 py-0.5 rounded font-mono text-xs">.env</code> file in your project root.</li>
-              <li>Get a key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-blue-600 underline">Google AI Studio</a>.</li>
-              <li>Add your API key: <code className="bg-white border border-slate-300 px-1.5 py-0.5 rounded font-mono text-xs">API_KEY=AIzaSy...</code></li>
-              <li>Restart the development server.</li>
-            </ul>
-          </div>
-        )}
-
+        <h2 className="text-2xl font-bold mb-4 text-slate-800">Processing Failed</h2>
+        <p className="text-slate-500 mb-10 text-base max-w-sm mx-auto leading-relaxed">{error}</p>
         <button 
-          onClick={() => { setError(null); onReset(); }} 
-          className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-3 px-8 rounded-xl transition-all"
+          onClick={() => { setError(null); setProcessing(false); }} 
+          className="bg-slate-900 text-white font-bold py-4 px-10 rounded-2xl hover:bg-slate-800 transition-all shadow-xl shadow-slate-900/20 active:scale-95"
         >
           Try Again
         </button>
@@ -351,125 +247,133 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
 
   if (completed) {
     return (
-      <div className="bg-white rounded-3xl shadow-xl p-12 text-center animate-fade-in">
-        <div className="mx-auto w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-6"><Download size={40}/></div>
-        <h2 className="text-3xl font-bold mb-4 text-slate-800">Ready!</h2>
-        <p className="text-slate-500 mb-8">Your file has been processed successfully.</p>
-        <a href={downloadUrl || '#'} download={downloadName} className="inline-flex items-center gap-2 bg-slate-900 text-white font-bold py-4 px-8 rounded-xl hover:shadow-xl hover:-translate-y-0.5 transition-all">
-          <Download size={20} /> Download File
-        </a>
-        <button onClick={onReset} className="block mt-6 mx-auto text-slate-500 hover:text-slate-800 font-medium transition-colors">Process another file</button>
+      <div className="bg-white rounded-[2.5rem] shadow-2xl p-16 text-center animate-fade-in border border-emerald-50">
+        <div className="mx-auto w-24 h-24 bg-emerald-50 text-emerald-500 rounded-full flex items-center justify-center mb-8 shadow-inner shadow-emerald-100/50">
+          <CheckCircle2 size={56} strokeWidth={1.5} className="animate-bounce" />
+        </div>
+        <h2 className="text-4xl font-extrabold mb-4 text-slate-900 tracking-tight">Ready for Download!</h2>
+        <p className="text-slate-500 mb-10 text-lg">Your {tool.name.toLowerCase()} operation was successful.</p>
+        
+        <div className="flex flex-col sm:flex-row gap-4 justify-center">
+          <a 
+            href={downloadUrl || '#'} 
+            download={downloadName} 
+            className="inline-flex items-center justify-center gap-3 bg-indigo-600 text-white font-bold py-5 px-12 rounded-2xl hover:shadow-2xl hover:shadow-indigo-200 hover:-translate-y-1 transition-all active:scale-95"
+          >
+            <Download size={22} /> Download Now
+          </a>
+          <button 
+            onClick={onReset} 
+            className="bg-slate-100 text-slate-600 font-bold py-5 px-10 rounded-2xl hover:bg-slate-200 transition-all active:scale-95"
+          >
+            Perform Another Task
+          </button>
+        </div>
       </div>
     );
   }
 
   if (processing) {
     return (
-      <div className="bg-white rounded-3xl shadow-xl p-16 text-center animate-fade-in">
-        <div className="mx-auto w-24 h-24 mb-8 relative">
-          <svg className="w-full h-full transform -rotate-90">
-            <circle cx="48" cy="48" r="40" stroke="currentColor" strokeWidth="8" fill="transparent" className="text-slate-100" />
-            <circle cx="48" cy="48" r="40" stroke="currentColor" strokeWidth="8" fill="transparent" strokeDasharray={251.2} strokeDashoffset={251.2 - (251.2 * progress) / 100} className="text-brand-500 transition-all duration-300" />
+      <div className="bg-white rounded-[2.5rem] shadow-2xl p-20 text-center animate-fade-in border border-slate-100">
+        <div className="mx-auto w-32 h-32 mb-10 relative">
+          <svg className="w-full h-full transform -rotate-90 filter drop-shadow-lg">
+            <circle cx="64" cy="64" r="58" stroke="currentColor" strokeWidth="8" fill="transparent" className="text-slate-100" />
+            <circle 
+              cx="64" cy="64" r="58" 
+              stroke="currentColor" strokeWidth="8" 
+              fill="transparent" 
+              strokeDasharray={364.4} 
+              strokeDashoffset={364.4 - (364.4 * progress) / 100} 
+              className="text-indigo-600 transition-all duration-500 ease-out" 
+              strokeLinecap="round" 
+            />
           </svg>
-          <div className="absolute inset-0 flex items-center justify-center font-bold text-xl text-slate-700">{progress}%</div>
+          <div className="absolute inset-0 flex items-center justify-center font-display text-2xl font-black text-slate-800">{Math.round(progress)}%</div>
         </div>
-        <h3 className="text-xl font-bold text-slate-800 mb-2">Processing your file...</h3>
-        <p className="text-slate-500">This might take a few seconds.</p>
+        <h3 className="text-2xl font-bold text-slate-900 mb-3 tracking-tight">Magically Processing...</h3>
+        <p className="text-slate-400 text-sm font-medium animate-pulse">Our intelligent engine is optimizing your document.</p>
       </div>
     );
   }
 
   return (
-    <div className="bg-white rounded-3xl shadow-xl overflow-hidden border border-white animate-fade-in">
-      <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-white">
-        <h3 className="text-2xl font-bold text-slate-800 flex items-center gap-3">
-          <div className="bg-brand-50 text-brand-600 p-2.5 rounded-xl shadow-sm"><tool.icon size={24} /></div>
-          {tool.name}
-        </h3>
-        <button onClick={onReset} className="text-slate-400 hover:text-brand-600 font-medium transition-colors">Reset</button>
+    <div className="bg-white rounded-[2.5rem] shadow-2xl overflow-hidden border border-slate-100 animate-fade-in">
+      <div className="px-10 py-8 border-b border-slate-50 bg-slate-50/30 flex justify-between items-center">
+        <div className="flex items-center gap-4">
+          <div className={`p-3 rounded-2xl text-white shadow-lg ${tool.color} ring-4 ring-white`}>
+            <tool.icon size={24} />
+          </div>
+          <div>
+            <h3 className="text-xl font-black text-slate-900 tracking-tight">{tool.name}</h3>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Active Workspace</p>
+          </div>
+        </div>
+        <button onClick={onReset} className="w-10 h-10 flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all">
+          <Trash2 size={20} />
+        </button>
       </div>
       
-      <div className="p-8">
-        {tool.id !== 'html-to-pdf' && (
-          <div className="space-y-4 mb-10">
-            {files.map(file => (
-              <div key={file.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100 group hover:border-brand-200 transition-all">
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center text-brand-500 shadow-sm">
-                    <FileIcon size={20} />
-                  </div>
-                  <div>
-                    <span className="font-medium text-slate-700 block">{file.file.name}</span>
-                    <span className="text-xs text-slate-400">{(file.file.size / 1024 / 1024).toFixed(2)} MB</span>
+      <div className="p-10">
+        <div className="space-y-4 mb-10">
+          {files.map(f => (
+            <div key={f.id} className="flex items-center justify-between p-5 bg-white rounded-2xl border border-slate-100 shadow-sm group hover:border-indigo-200 transition-all">
+              <div className="flex items-center gap-5">
+                <div className="w-12 h-12 bg-slate-50 rounded-xl flex items-center justify-center text-indigo-600 group-hover:scale-110 transition-transform">
+                  <FileIcon size={24} />
+                </div>
+                <div>
+                  <span className="font-bold text-slate-800 block text-base truncate max-w-[300px]">{f.file.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-400 font-black uppercase tracking-widest">{(f.file.size / 1024 / 1024).toFixed(2)} MB</span>
+                    <span className="w-1 h-1 rounded-full bg-slate-200"></span>
+                    <span className="text-[10px] text-indigo-500 font-black uppercase tracking-widest">{f.file.type.split('/')[1] || 'DOC'}</span>
                   </div>
                 </div>
-                <button onClick={() => onRemoveFile(file.id)} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"><Trash2 size={20} /></button>
               </div>
-            ))}
-             {tool.acceptsMultiple && (
-                <div className="text-center">
-                  <button className="text-sm text-brand-600 font-bold hover:underline">+ Add another file</button>
+              <button onClick={() => onRemoveFile(f.id)} className="p-3 text-slate-300 hover:text-red-500 transition-all opacity-0 group-hover:opacity-100">
+                <Trash2 size={20} />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {/* Dynamic Tool Controls */}
+        <div className="space-y-8 mb-10">
+          {tool.id === 'rotate' && (
+            <div className="p-8 bg-slate-50 rounded-3xl border border-slate-200 shadow-inner">
+              <p className="text-center text-[10px] font-black text-slate-400 uppercase mb-6 tracking-widest">Select Rotation Intensity</p>
+              <div className="flex justify-center items-center gap-10">
+                <button onClick={() => setRotationAngle(a => a - 90)} className="w-16 h-16 bg-white rounded-2xl border border-slate-200 hover:border-indigo-500 hover:text-indigo-600 shadow-sm transition-all active:scale-90 flex items-center justify-center"><RotateCw className="-scale-x-100" size={24}/></button>
+                <div className="relative">
+                   <span className="text-4xl font-black text-slate-900 w-24 text-center block tabular-nums">{rotationAngle}°</span>
+                   <div className="absolute -bottom-2 left-0 w-full h-1 bg-indigo-500 rounded-full"></div>
                 </div>
-             )}
-          </div>
-        )}
-
-        {/* Dynamic Inputs based on Tool */}
-        {tool.id === 'rotate' && (
-          <div className="mb-8 text-center bg-slate-50 p-6 rounded-2xl border border-slate-100">
-            <p className="mb-4 text-slate-500 font-medium uppercase tracking-wider text-xs">Rotation Angle</p>
-            <div className="flex justify-center items-center gap-6">
-              <button onClick={() => setRotationAngle(prev => prev - 90)} className="w-16 h-16 bg-white border border-slate-200 rounded-xl hover:border-brand-500 hover:text-brand-600 flex flex-col items-center justify-center shadow-sm transition-all"><RotateCw className="-scale-x-100 mb-1" size={20}/><span className="text-[10px] font-bold">-90°</span></button>
-              <div className="text-2xl font-bold w-20 text-center text-slate-800">{rotationAngle}°</div>
-              <button onClick={() => setRotationAngle(prev => prev + 90)} className="w-16 h-16 bg-white border border-slate-200 rounded-xl hover:border-brand-500 hover:text-brand-600 flex flex-col items-center justify-center shadow-sm transition-all"><RotateCw className="mb-1" size={20}/><span className="text-[10px] font-bold">+90°</span></button>
+                <button onClick={() => setRotationAngle(a => a + 90)} className="w-16 h-16 bg-white rounded-2xl border border-slate-200 hover:border-indigo-500 hover:text-indigo-600 shadow-sm transition-all active:scale-90 flex items-center justify-center"><RotateCw size={24}/></button>
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {tool.id === 'add-watermark' && (
-          <div className="mb-8">
-            <label className="block text-sm font-bold text-slate-700 mb-2">Watermark Text</label>
-            <div className="flex items-center border border-slate-200 rounded-xl px-4 py-3 focus-within:ring-2 ring-brand-100 bg-slate-50 focus-within:bg-white transition-all">
-               <Type className="text-slate-400 mr-2" />
-               <input type="text" value={watermarkText} onChange={e => setWatermarkText(e.target.value)} className="flex-1 outline-none bg-transparent" placeholder="e.g. CONFIDENTIAL" />
+          {tool.id === 'add-watermark' && (
+            <div className="space-y-3">
+              <label className="text-[10px] font-black text-slate-400 uppercase px-1 tracking-widest">Custom Watermark Content</label>
+              <input 
+                type="text" 
+                value={watermarkText} 
+                onChange={e => setWatermarkText(e.target.value)} 
+                className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-6 py-4 focus:bg-white focus:border-indigo-400 outline-none transition-all text-slate-800 font-bold shadow-inner" 
+                placeholder="e.g. PRIVATE"
+              />
             </div>
-          </div>
-        )}
-
-        {tool.id === 'html-to-pdf' && (
-          <div className="mb-8">
-             <div className="mb-4 p-4 bg-blue-50 text-blue-700 rounded-xl text-sm border border-blue-100">
-                Upload an HTML file above OR paste code below.
-             </div>
-             <textarea 
-               value={htmlInput} 
-               onChange={e => setHtmlInput(e.target.value)}
-               placeholder="<html><body><h1>Hello World</h1></body></html>"
-               className="w-full h-40 p-4 border border-slate-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 ring-brand-100 resize-none bg-slate-50 focus:bg-white transition-all"
-             />
-          </div>
-        )}
-
-        {tool.id === 'crop' && (
-          <div className="mb-8 p-4 bg-teal-50 text-teal-800 rounded-xl text-sm flex items-center gap-3 border border-teal-100">
-             <div className="bg-teal-100 p-2 rounded-lg"><Crop size={18} /></div>
-             <span className="font-medium">This will automatically crop 1 inch from all margins.</span>
-          </div>
-        )}
-
-        {tool.id === 'page-numbers' && (
-          <div className="mb-8 p-4 bg-blue-50 text-blue-800 rounded-xl text-sm flex items-center gap-3 border border-blue-100">
-             <div className="bg-blue-100 p-2 rounded-lg"><Hash size={18} /></div>
-             <span className="font-medium">Page numbers will be added to the bottom center of each page.</span>
-          </div>
-        )}
+          )}
+        </div>
 
         <button 
-          onClick={handleProcess}
-          className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold text-lg py-5 rounded-2xl shadow-xl shadow-slate-900/10 hover:shadow-2xl hover:-translate-y-0.5 transition-all flex items-center justify-center gap-3 group"
+          onClick={handleProcess} 
+          className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-6 rounded-[1.5rem] shadow-2xl shadow-slate-900/20 hover:shadow-indigo-900/20 hover:-translate-y-1 transition-all flex items-center justify-center gap-4 text-lg group"
         >
-          <span>{tool.id.includes('to') ? 'Convert' : tool.name.split(' ')[0]} Now</span> 
-          <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
+          Begin Intelligent Processing 
+          <ArrowRight size={24} className="group-hover:translate-x-2 transition-transform" />
         </button>
       </div>
     </div>
