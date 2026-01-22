@@ -1,5 +1,6 @@
+
 import React from 'react';
-import { FileText, Menu, X, Sparkles } from 'lucide-react';
+import { FileText, Menu, X, ShieldCheck } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 
 export const Header: React.FC = () => {
@@ -13,14 +14,14 @@ export const Header: React.FC = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-20 items-center">
           <Link to="/" className="flex items-center gap-3 group">
-            <div className="bg-gradient-to-br from-brand-500 to-brand-700 text-white p-2.5 rounded-xl shadow-lg shadow-brand-500/30 group-hover:rotate-3 transition-transform duration-300">
+            <div className="bg-gradient-to-br from-emerald-500 to-emerald-700 text-white p-2.5 rounded-xl shadow-lg shadow-emerald-500/30 group-hover:rotate-3 transition-transform duration-300">
               <FileText size={24} strokeWidth={2.5} />
             </div>
             <div className="flex flex-col">
               <span className="font-display text-xl font-bold tracking-tight text-slate-900 leading-none">
-                Codemanic studio <span className="text-brand-600">PDFMaster</span>
+                Codemanic studio <span className="text-emerald-600">PDFMaster</span>
               </span>
-              <span className="text-[10px] font-medium text-slate-400 tracking-wider uppercase">Intelligent Suite</span>
+              <span className="text-[10px] font-medium text-slate-400 tracking-wider uppercase">Local Private Suite</span>
             </div>
           </Link>
 
@@ -37,7 +38,7 @@ export const Header: React.FC = () => {
                 to={link.path} 
                 className={`px-5 py-2 rounded-full text-sm font-medium transition-all duration-300 ${
                   isActive(link.path) 
-                    ? 'bg-white text-brand-600 shadow-sm' 
+                    ? 'bg-white text-emerald-600 shadow-sm' 
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
                 }`}
               >
@@ -51,8 +52,8 @@ export const Header: React.FC = () => {
               to="/chat-pdf" 
               className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-xl font-medium transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5"
             >
-              <Sparkles size={16} className="text-yellow-300" />
-              <span>AI Assistant</span>
+              <ShieldCheck size={16} className="text-emerald-400" />
+              <span>Private Mode</span>
             </Link>
           </div>
 
@@ -74,7 +75,7 @@ export const Header: React.FC = () => {
             <Link to="/merge" className="block py-3 px-4 rounded-xl hover:bg-slate-50 text-slate-700 font-medium">Merge PDF</Link>
             <Link to="/split" className="block py-3 px-4 rounded-xl hover:bg-slate-50 text-slate-700 font-medium">Split PDF</Link>
             <Link to="/chat-pdf" className="block py-3 px-4 rounded-xl bg-slate-900 text-white font-medium mt-4 flex items-center gap-2">
-               <Sparkles size={16} /> AI Assistant
+               <ShieldCheck size={16} /> Private Mode
             </Link>
           </div>
         </div>

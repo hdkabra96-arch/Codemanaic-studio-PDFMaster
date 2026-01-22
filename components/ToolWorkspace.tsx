@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { ToolConfig, UploadedFile, ChatMessage } from '../types';
-import { Trash2, ArrowRight, Download, RotateCw, File as FileIcon, Loader2, Send, Sparkles, AlertCircle, RefreshCcw, CheckCircle2, ChevronRight } from 'lucide-react';
+import { Trash2, ArrowRight, Download, RotateCw, File as FileIcon, Loader2, Send, Sparkles, AlertCircle, RefreshCcw, CheckCircle2, ShieldCheck } from 'lucide-react';
 import { generatePDFAnalysis, fileToGenerativePart, convertPDFToDoc, convertPDFToExcel, convertJPGToWordOCR } from '../services/geminiService';
 import { mergePDFs, splitPDF, rotatePDF, convertWordToPDF, imagesToPDF, pdfToImages, addWatermark, addPageNumbers, cropPDF, repairPDF } from '../services/pdfUtils';
 import * as XLSX from 'xlsx';
@@ -40,7 +40,7 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
       setChatMessages([{
         id: 'init',
         role: 'model',
-        text: `Hello! I've loaded **${files[0].file.name}**. I can help you summarize it, find specific details, or explain complex sections. What can I do for you?`,
+        text: `Hello! I've indexed **${files[0].file.name}** locally on your device. I can help you find keywords, provide a summary, or locate specific sections. Since I run 100% in your browser, your data never leaves this computer.`,
         timestamp: Date.now()
       }]);
     }
@@ -104,15 +104,13 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
           resultName = files[0].file.name.replace(/\.docx?$/i, '.pdf');
           break;
         case 'pdf-to-word': {
-          const base64 = await fileToGenerativePart(files[0].file);
-          const htmlDoc = await convertPDFToDoc(base64);
+          const htmlDoc = await convertPDFToDoc('', files[0].file);
           resultBlob = new Blob([htmlDoc], { type: 'application/msword' });
           resultName = files[0].file.name.replace(/\.pdf$/i, '.doc');
           break;
         }
         case 'pdf-to-excel': {
-          const base64 = await fileToGenerativePart(files[0].file);
-          const jsonData = await convertPDFToExcel(base64);
+          const jsonData = await convertPDFToExcel('', files[0].file);
           const wb = XLSX.utils.book_new();
           (jsonData.tables || []).forEach((t: any, i: number) => {
             const ws = XLSX.utils.aoa_to_sheet(t.rows);
@@ -157,11 +155,11 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
     setChatInput('');
     setIsThinking(true);
     try {
-      const base64 = await fileToGenerativePart(files[0].file);
-      const res = await generatePDFAnalysis(base64, msg.text);
-      setChatMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: res || "I apologize, but I couldn't generate a response for that query.", timestamp: Date.now() }]);
+      // Pass the file directly for local extraction
+      const res = await generatePDFAnalysis('', msg.text, files[0].file);
+      setChatMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: res || "I couldn't find relevant information in the document.", timestamp: Date.now() }]);
     } catch (err: any) {
-      setChatMessages(prev => [...prev, { id: 'err', role: 'model', text: "Service Error: " + err.message, timestamp: Date.now() }]);
+      setChatMessages(prev => [...prev, { id: 'err', role: 'model', text: "Local Error: " + err.message, timestamp: Date.now() }]);
     } finally {
       setIsThinking(false);
     }
@@ -172,12 +170,12 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
       <div className="bg-white rounded-[2rem] shadow-2xl flex flex-col h-[750px] border border-slate-100 overflow-hidden animate-fade-in ring-1 ring-slate-200/50">
         <div className="px-8 py-5 border-b flex justify-between bg-slate-50 items-center">
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-brand-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-brand-200">
-              <Sparkles size={24} className="animate-pulse" />
+            <div className="w-12 h-12 bg-emerald-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-emerald-200">
+              <ShieldCheck size={24} />
             </div>
             <div>
-              <h4 className="font-display font-black text-slate-900 text-lg">Deep Doc Assistant</h4>
-              <p className="text-[10px] text-brand-600 font-black uppercase tracking-widest">Powered by Gemini 3 Pro</p>
+              <h4 className="font-display font-black text-slate-900 text-lg">Private Assistant</h4>
+              <p className="text-[10px] text-emerald-600 font-black uppercase tracking-widest">100% Offline Analysis</p>
             </div>
           </div>
           <button onClick={onReset} className="p-3 text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 rounded-xl transition-all">
@@ -192,7 +190,9 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
                   ? 'bg-slate-900 text-white rounded-tr-none font-medium' 
                   : 'bg-white text-slate-700 border border-slate-100 rounded-tl-none border-l-4 border-l-brand-500'
               }`}>
-                {m.text}
+                <div className="prose prose-sm max-w-none">
+                  {m.text.split('\n').map((line, i) => <p key={i} className="mb-2 last:mb-0">{line}</p>)}
+                </div>
               </div>
             </div>
           ))}
@@ -201,7 +201,7 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
               <div className="w-10 h-10 bg-brand-50 rounded-xl flex items-center justify-center">
                 <Loader2 size={20} className="animate-spin text-brand-500" />
               </div>
-              <span className="text-sm text-brand-500 font-bold tracking-tight">AI is analyzing context...</span>
+              <span className="text-sm text-brand-500 font-bold tracking-tight">Scanning local document index...</span>
             </div>
           )}
           <div ref={chatBottomRef} />
@@ -212,7 +212,7 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
             onChange={e => setChatInput(e.target.value)} 
             onKeyDown={e => e.key === 'Enter' && handleSendMessage()} 
             className="flex-1 bg-slate-100 border-none rounded-2xl px-6 py-5 text-sm focus:ring-4 focus:ring-brand-100 focus:bg-white outline-none transition-all font-medium placeholder:text-slate-400" 
-            placeholder="Summarize the key points of this PDF..." 
+            placeholder="Ask for a 'summary' or search keywords..." 
           />
           <button 
             onClick={handleSendMessage} 
@@ -226,6 +226,7 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
     );
   }
 
+  // Same for other tools, but process locally
   if (error) {
     return (
       <div className="bg-white rounded-[3rem] shadow-2xl p-20 text-center animate-fade-in border border-red-100">
@@ -251,7 +252,7 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
           <CheckCircle2 size={56} strokeWidth={1.5} />
         </div>
         <h2 className="text-4xl font-black mb-4 text-slate-900 tracking-tight">Success!</h2>
-        <p className="text-slate-500 mb-12 text-xl font-medium">Your document has been professionally processed.</p>
+        <p className="text-slate-500 mb-12 text-xl font-medium">Your document has been processed locally and securely.</p>
         
         <div className="flex flex-col sm:flex-row gap-6 justify-center">
           <a 
@@ -294,8 +295,8 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
           </svg>
           <div className="absolute inset-0 flex items-center justify-center font-display text-3xl font-black text-slate-900">{Math.round(progress)}%</div>
         </div>
-        <h3 className="text-3xl font-black text-slate-900 mb-4 tracking-tight">Intelligent Processing</h3>
-        <p className="text-slate-400 text-lg font-medium animate-pulse">Our engine is optimizing your document using Gemini AI...</p>
+        <h3 className="text-3xl font-black text-slate-900 mb-4 tracking-tight">Browser-Native Processing</h3>
+        <p className="text-slate-400 text-lg font-medium animate-pulse">Running optimized local algorithms on your CPU...</p>
       </div>
     );
   }

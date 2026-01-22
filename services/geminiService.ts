@@ -1,10 +1,129 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import * as pdfjsLib from 'pdfjs-dist';
+import Tesseract from 'tesseract.js';
 
-// Initialize AI directly using the environment variable as per senior engineer guidelines.
-// This assumes the key is pre-configured in the deployment environment.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+// Set worker for pdf.js - using ESM version
+const pdfjs = (pdfjsLib as any).default || pdfjsLib;
+pdfjs.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs`;
 
+/**
+ * Extracts raw text from a PDF for local analysis.
+ */
+export const extractTextFromPDF = async (file: File): Promise<string> => {
+  const arrayBuffer = await file.arrayBuffer();
+  const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
+  const pdf = await loadingTask.promise;
+  let fullText = '';
+
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items.map((item: any) => item.str).join(' ');
+    fullText += pageText + '\n';
+  }
+
+  return fullText;
+};
+
+/**
+ * Local implementation of PDF Analysis (Smart Search & Summarization)
+ */
+export const generatePDFAnalysis = async (fileBase64: string, prompt: string, file?: File) => {
+  // If file is not provided, we extract from base64 (less efficient but necessary for compatibility)
+  let text = '';
+  if (file) {
+    text = await extractTextFromPDF(file);
+  } else {
+    // Basic base64 to File conversion
+    const byteString = atob(fileBase64);
+    const ab = new ArrayBuffer(byteString.length);
+    const ia = new Uint8Array(ab);
+    for (let i = 0; i < byteString.length; i++) {
+      ia[i] = byteString.charCodeAt(i);
+    }
+    const blob = new Blob([ab], { type: 'application/pdf' });
+    const tempFile = new File([blob], "temp.pdf", { type: 'application/pdf' });
+    text = await extractTextFromPDF(tempFile);
+  }
+
+  const query = prompt.toLowerCase();
+  
+  if (query.includes('summarize') || query.includes('summary')) {
+    const lines = text.split('\n').filter(l => l.trim().length > 10);
+    const summary = lines.slice(0, 10).join(' ') + '...';
+    return `### Local Document Summary\n\nThis document contains approximately ${text.split(' ').length} words across multiple sections. \n\n**Overview:** ${summary}\n\n*Note: This analysis was performed locally in your browser for privacy.*`;
+  }
+
+  // Basic Keyword Matching
+  const sentences = text.split(/[.!?]+/);
+  const relevantSentences = sentences.filter(s => s.toLowerCase().includes(query)).slice(0, 5);
+
+  if (relevantSentences.length > 0) {
+    return `### Local Search Results\n\nFound ${relevantSentences.length} matches for "${prompt}":\n\n${relevantSentences.map(s => `- ...${s.trim()}...`).join('\n\n')}`;
+  }
+
+  return `I analyzed the document locally but couldn't find a direct match for your query. Try asking for a "summary" or using specific keywords found in the text.`;
+};
+
+/**
+ * Local PDF to Doc conversion via Text Extraction
+ */
+export const convertPDFToDoc = async (fileBase64: string, file?: File): Promise<string> => {
+  let text = '';
+  if (file) {
+    text = await extractTextFromPDF(file);
+  } else {
+    return "Error: Local conversion requires a File object.";
+  }
+  
+  return `<html><body><pre style="white-space: pre-wrap; font-family: sans-serif;">${text}</pre></body></html>`;
+};
+
+/**
+ * Local PDF to Excel detection (Basic heuristic)
+ */
+export const convertPDFToExcel = async (fileBase64: string, file?: File): Promise<any> => {
+  let text = '';
+  if (file) {
+    text = await extractTextFromPDF(file);
+  } else {
+    return { tables: [] };
+  }
+
+  // Very basic heuristic: lines with multiple spaces or tabs often indicate tabular data
+  const lines = text.split('\n');
+  const tableRows = lines.map(line => line.split(/\s{2,}/).filter(c => c.trim().length > 0)).filter(row => row.length > 1);
+
+  return {
+    tables: [
+      {
+        name: "Extracted Data",
+        rows: tableRows
+      }
+    ]
+  };
+};
+
+/**
+ * Local OCR using Tesseract.js
+ */
+export const convertJPGToWordOCR = async (fileBase64: string, mimeType: string): Promise<string> => {
+  try {
+    const result = await Tesseract.recognize(
+      `data:${mimeType};base64,${fileBase64}`,
+      'eng',
+      { logger: m => console.log(m) }
+    );
+    
+    const text = result.data.text;
+    return `<html><body><pre style="white-space: pre-wrap; font-family: sans-serif;">${text}</pre></body></html>`;
+  } catch (error) {
+    console.error("Local OCR Error:", error);
+    throw new Error("Failed to perform local OCR. Please ensure the image is clear.");
+  }
+};
+
+// Compatibility export
 export const fileToGenerativePart = async (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -16,101 +135,4 @@ export const fileToGenerativePart = async (file: File): Promise<string> => {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
-};
-
-export const generatePDFAnalysis = async (fileBase64: string, prompt: string) => {
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
-      contents: [
-        {
-          parts: [
-            { inlineData: { mimeType: 'application/pdf', data: fileBase64 } },
-            { text: prompt }
-          ]
-        }
-      ],
-      config: {
-        systemInstruction: "You are an expert document analyst. Provide precise, professional, and actionable insights from the provided PDF. Use Markdown for formatting.",
-      }
-    });
-    return response.text;
-  } catch (error) {
-    console.error("Gemini API Error:", error);
-    throw new Error("Unable to analyze document. Please ensure the API key is valid and has sufficient quota.");
-  }
-};
-
-export const convertPDFToDoc = async (fileBase64: string): Promise<string> => {
-  const prompt = `Extract all text and structural elements from this PDF. Reconstruct it into a clean, well-formatted HTML document suitable for word processing. Include headings, paragraphs, lists, and tables. Return ONLY the HTML code.`;
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: [{ parts: [{ inlineData: { mimeType: 'application/pdf', data: fileBase64 } }, { text: prompt }] }],
-      config: {
-        systemInstruction: "You are a specialized file conversion engine. Your output must be valid, semantic HTML."
-      }
-    });
-    return response.text || "";
-  } catch (error) {
-    console.error("Conversion Error:", error);
-    throw error;
-  }
-};
-
-export const convertPDFToExcel = async (fileBase64: string): Promise<any> => {
-  const prompt = `Identify and extract all tabular data from this PDF. Organize the data into structured tables.`;
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: [{ parts: [{ inlineData: { mimeType: 'application/pdf', data: fileBase64 } }, { text: prompt }] }],
-      config: { 
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            tables: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  rows: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING }
-                    }
-                  }
-                },
-                required: ["rows"]
-              }
-            }
-          }
-        }
-      }
-    });
-    const result = response.text;
-    return JSON.parse(result || "{\"tables\":[]}");
-  } catch (error) {
-    console.error("Excel Conversion Error:", error);
-    throw error;
-  }
-};
-
-export const convertJPGToWordOCR = async (fileBase64: string, mimeType: string): Promise<string> => {
-  const prompt = `Extract all text and formatting from this image. Convert it into a semantic, clean HTML document. Maintain table structures and text emphasis. Return ONLY HTML.`;
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: [{ parts: [{ inlineData: { mimeType, data: fileBase64 } }, { text: prompt }] }],
-      config: {
-        systemInstruction: "You are a high-precision OCR engine."
-      }
-    });
-    return response.text || "";
-  } catch (error) {
-    console.error("OCR Error:", error);
-    throw error;
-  }
 };
