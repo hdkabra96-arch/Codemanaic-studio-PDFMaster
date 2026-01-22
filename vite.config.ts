@@ -10,7 +10,8 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     define: {
       // Polyfill process.env for your existing code
-      'process.env.API_KEY': JSON.stringify(env.API_KEY)
+      // Use logical OR to ensure we replace with "" if undefined, avoiding 'process is not defined'
+      'process.env.API_KEY': JSON.stringify(env.API_KEY || "")
     },
     build: {
       outDir: 'dist',
