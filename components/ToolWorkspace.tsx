@@ -311,6 +311,13 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
      );
   }
 
+  // Check if error is related to API Key or permissions
+  const isAuthError = error && (
+    error.toLowerCase().includes("api key") || 
+    error.toLowerCase().includes("unauthorized") ||
+    error.toLowerCase().includes("permission")
+  );
+
   if (error) {
     return (
       <div className="bg-white rounded-3xl shadow-xl p-12 text-center animate-fade-in border border-red-100">
@@ -320,11 +327,12 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
         <h2 className="text-2xl font-bold mb-4 text-slate-800">Something went wrong</h2>
         <p className="text-slate-600 mb-8 max-w-lg mx-auto">{error}</p>
         
-        {error.includes("API Key") && (
+        {isAuthError && (
           <div className="bg-slate-50 p-6 rounded-xl text-left text-sm text-slate-700 mb-8 border border-slate-200 max-w-lg mx-auto">
             <p className="font-bold mb-3 flex items-center gap-2"><Code size={16}/> Setup Required</p>
             <ul className="list-decimal list-inside space-y-2 text-slate-600">
               <li>Create a <code className="bg-white border border-slate-300 px-1.5 py-0.5 rounded font-mono text-xs">.env</code> file in your project root.</li>
+              <li>Get a key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-blue-600 underline">Google AI Studio</a>.</li>
               <li>Add your API key: <code className="bg-white border border-slate-300 px-1.5 py-0.5 rounded font-mono text-xs">API_KEY=AIzaSy...</code></li>
               <li>Restart the development server.</li>
             </ul>
