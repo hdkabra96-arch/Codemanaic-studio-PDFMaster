@@ -5,6 +5,7 @@ import { Trash2, ArrowRight, Download, RotateCw, File as FileIcon, Loader2, Send
 import { generatePDFAnalysis, fileToGenerativePart, convertPDFToDoc, convertPDFToExcel, convertJPGToWordOCR } from '../services/geminiService';
 import { mergePDFs, splitPDF, rotatePDF, convertWordToPDF, imagesToPDF, pdfToImages, addWatermark, addPageNumbers, cropPDF, repairPDF } from '../services/pdfUtils';
 import * as XLSX from 'xlsx';
+import { PDFEditor } from './PDFEditor';
 
 interface ToolWorkspaceProps {
   tool: ToolConfig;
@@ -125,7 +126,7 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
           const base64 = await fileToGenerativePart(files[0].file);
           const html = await convertJPGToWordOCR(base64, files[0].file.type);
           resultBlob = new Blob([html], { type: 'application/msword' });
-          resultName = files[0].file.name + '.doc';
+          resultName = files[0].file.name.replace(/\.[^/.]+$/, "") + '.doc';
           break;
         }
         default:
@@ -164,6 +165,10 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
       setIsThinking(false);
     }
   };
+
+  if (tool.id === 'edit-pdf') {
+    return <PDFEditor file={files[0]} onClose={onReset} />;
+  }
 
   if (tool.id === 'chat-pdf') {
     return (

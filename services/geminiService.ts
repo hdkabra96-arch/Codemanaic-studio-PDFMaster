@@ -18,8 +18,18 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const textContent = await page.getTextContent();
-    const pageText = textContent.items.map((item: any) => (item as any).str).join(' ');
-    fullText += pageText + '\n';
+    // Improved extraction: checks for large vertical gaps to insert newlines
+    let lastY = -1;
+    const pageText = textContent.items.map((item: any) => {
+      let str = item.str;
+      // Simple heuristic: if Y position changes significantly, add newline
+      if (lastY !== -1 && Math.abs(item.transform[5] - lastY) > 10) {
+        str = '\n' + str;
+      }
+      lastY = item.transform[5];
+      return str;
+    }).join(' ');
+    fullText += pageText + '\n\n';
   }
 
   return fullText;
@@ -85,7 +95,61 @@ export const convertJPGToWordOCR = async (fileBase64: string, mimeType: string):
       `data:${mimeType};base64,${fileBase64}`,
       'eng'
     );
-    return `<html><body style="font-family: sans-serif; white-space: pre-wrap;">${result.data.text}</body></html>`;
+
+    // Reconstruct paragraphs
+    // Tesseract's paragraphs often contain line breaks within sentences. 
+    // We join them with spaces, but preserve actual paragraphs.
+    const paragraphs = (result.data.paragraphs || []).map(p => {
+      const cleanText = p.text.replace(/[\r\n]+/g, ' ').trim();
+      if (!cleanText) return '';
+      return `<p class="MsoNormal">${cleanText}</p>`;
+    }).join('\n');
+
+    // Fallback if paragraphs are empty but text exists
+    const content = paragraphs || `<p class="MsoNormal">${result.data.text.replace(/[\r\n]+/g, ' ')}</p>`;
+
+    // MS Word-specific HTML structure
+    return `
+      <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+      <head>
+        <meta charset="utf-8">
+        <title>OCR Result</title>
+        <!--[if gte mso 9]>
+        <xml>
+        <w:WordDocument>
+        <w:View>Print</w:View>
+        <w:Zoom>100</w:Zoom>
+        <w:DoNotOptimizeForBrowser/>
+        </w:WordDocument>
+        </xml>
+        <![endif]-->
+        <style>
+          /* Basic Word styles */
+          p.MsoNormal, li.MsoNormal, div.MsoNormal {
+            margin: 0in 0in 8pt;
+            font-size: 11pt;
+            font-family: "Calibri", sans-serif;
+            line-height: 115%;
+          }
+          @page Section1 {
+            size: 8.5in 11in;
+            margin: 1in;
+            mso-header-margin: 0.5in;
+            mso-footer-margin: 0.5in;
+            mso-paper-source: 0;
+          }
+          div.Section1 {
+            page: Section1;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="Section1">
+          ${content}
+        </div>
+      </body>
+      </html>
+    `;
   } catch (error) {
     throw new Error("Local OCR failed. Please ensure the image is high contrast.");
   }

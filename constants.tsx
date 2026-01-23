@@ -2,7 +2,7 @@
 import { 
   Merge, Split, Minimize2, FileText, Image, Table, MonitorPlay, 
   RefreshCw, Lock, Unlock, BrainCircuit, FileType, ScanText,
-  FileCode, Scissors, Diff, Hammer, FilePlus, Eraser, Hash, Crop, ShieldCheck
+  FileCode, Scissors, Diff, Hammer, FilePlus, Eraser, Hash, Crop, ShieldCheck, FilePenLine
 } from 'lucide-react';
 import { ToolConfig, ToolCategory } from './types';
 
@@ -114,6 +114,17 @@ export const TOOLS: ToolConfig[] = [
 
   // Edit & Optimize
   {
+    id: 'edit-pdf',
+    name: 'Edit PDF',
+    description: 'Add text, shapes, and redact content locally.',
+    icon: FilePenLine,
+    path: '/edit-pdf',
+    category: ToolCategory.EDIT,
+    acceptsMultiple: false,
+    acceptsTypes: '.pdf',
+    color: 'bg-indigo-600'
+  },
+  {
     id: 'compress',
     name: 'Compress PDF',
     description: 'Reduce file size locally without server uploads.',
@@ -171,7 +182,7 @@ export const TOOLS: ToolConfig[] = [
     color: 'bg-slate-700'
   },
 
-  // Privacy Assistant (Formerly AI)
+  // AI & Analysis (Includes OCR)
   {
     id: 'chat-pdf',
     name: 'Local PDF Index',
@@ -185,13 +196,13 @@ export const TOOLS: ToolConfig[] = [
   },
   {
     id: 'jpg-to-word',
-    name: 'Local OCR Engine',
-    description: 'High-speed local OCR for text extraction.',
-    icon: ScanText,
+    name: 'JPG to Word',
+    description: 'Extract text from images into editable Word Docs.',
+    icon: FileText,
     path: '/jpg-to-word',
     category: ToolCategory.AI,
     acceptsMultiple: false,
     acceptsTypes: '.jpg,.jpeg,.png',
-    color: 'bg-rose-600'
+    color: 'bg-blue-600'
   },
 ];

@@ -3,9 +3,20 @@ import { PDFDocument, degrees, rgb, StandardFonts } from 'pdf-lib';
 import JSZip from 'jszip';
 import * as mammoth from 'mammoth';
 import * as pdfjsLib from 'pdfjs-dist';
+import { PDFEdits } from '../types';
 
 const pdfjs = (pdfjsLib as any).default || pdfjsLib;
 pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs`;
+
+// Helper for hex to RGB
+const hexToRgb = (hex: string) => {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16) / 255,
+    g: parseInt(result[2], 16) / 255,
+    b: parseInt(result[3], 16) / 255
+  } : { r: 0, g: 0, b: 0 };
+};
 
 export const mergePDFs = async (files: File[]): Promise<Blob> => {
   const mergedPdf = await PDFDocument.create();
@@ -151,4 +162,85 @@ export const repairPDF = async (file: File): Promise<Blob> => {
   const arrayBuffer = await file.arrayBuffer();
   const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   return new Blob([await pdfDoc.save()], { type: 'application/pdf' });
+};
+
+export const saveAnnotatedPDF = async (file: File, edits: PDFEdits): Promise<Blob> => {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  const pages = pdfDoc.getPages();
+
+  const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const times = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+  const courier = await pdfDoc.embedFont(StandardFonts.Courier);
+
+  for (const [pageIndexStr, pageEdits] of Object.entries(edits)) {
+    const pageIndex = parseInt(pageIndexStr, 10);
+    if (pageIndex >= pages.length) continue;
+    
+    const page = pages[pageIndex];
+    const { height } = page.getSize();
+
+    for (const edit of pageEdits) {
+      if (edit.type === 'text' && edit.text) {
+        const color = hexToRgb(edit.color || '#000000');
+        let font = helvetica;
+        if (edit.fontFamily === 'Times-Roman') font = times;
+        if (edit.fontFamily === 'Courier') font = courier;
+
+        page.drawText(edit.text, {
+          x: edit.x,
+          y: height - edit.y - (edit.fontSize || 12), // Flip Y
+          size: edit.fontSize || 12,
+          font: font,
+          color: rgb(color.r, color.g, color.b),
+        });
+      } else if (edit.type === 'rectangle') {
+        const color = hexToRgb(edit.backgroundColor || '#ffffff');
+        page.drawRectangle({
+          x: edit.x,
+          y: height - edit.y - (edit.height || 0),
+          width: edit.width || 100,
+          height: edit.height || 50,
+          color: rgb(color.r, color.g, color.b),
+          opacity: edit.opacity || 1
+        });
+      } else if (edit.type === 'image' && edit.imageData) {
+        try {
+          let image;
+          if (edit.imageData.startsWith('data:image/png')) {
+            image = await pdfDoc.embedPng(edit.imageData);
+          } else {
+            image = await pdfDoc.embedJpg(edit.imageData);
+          }
+          page.drawImage(image, {
+            x: edit.x,
+            y: height - edit.y - (edit.height || 100),
+            width: edit.width || 100,
+            height: edit.height || 100,
+            opacity: edit.opacity || 1
+          });
+        } catch (e) {
+          console.error("Failed to embed image", e);
+        }
+      } else if (edit.type === 'drawing' && edit.path && edit.path.length > 1) {
+        const color = hexToRgb(edit.color || '#000000');
+        const path = edit.path;
+        // Draw connected lines for the path
+        for (let i = 0; i < path.length - 1; i++) {
+          const start = path[i];
+          const end = path[i+1];
+          page.drawLine({
+            start: { x: start.x, y: height - start.y },
+            end: { x: end.x, y: height - end.y },
+            thickness: edit.lineWidth || 2,
+            color: rgb(color.r, color.g, color.b),
+            opacity: edit.opacity || 1
+          });
+        }
+      }
+    }
+  }
+
+  const pdfBytes = await pdfDoc.save();
+  return new Blob([pdfBytes], { type: 'application/pdf' });
 };
