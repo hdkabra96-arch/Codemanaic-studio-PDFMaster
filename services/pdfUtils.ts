@@ -60,24 +60,180 @@ export const rotatePDF = async (file: File, rotationAngle: number): Promise<Blob
   return new Blob([pdfBytes], { type: 'application/pdf' });
 };
 
+/**
+ * Advanced Binary Scraper for Legacy Word (.doc / Office 97-2003)
+ * 
+ * Unlike .docx (which is XML), .doc files are OLE2 Binaries.
+ * Text is typically stored in contiguous streams encoded as UTF-16LE or ANSI.
+ * This algorithm scans the binary dump for text-like patterns.
+ */
+const extractLegacyDocText = (arrayBuffer: ArrayBuffer): string => {
+  const dataView = new DataView(arrayBuffer);
+  const fileSize = dataView.byteLength;
+  
+  let paragraphs: string[] = [];
+  let currentRun = "";
+  
+  // HEURISTIC CONFIGURATION
+  // We accept characters that are typical in Western documents.
+  // 13 (CR) is a paragraph break.
+  const isReadable = (code: number) => {
+    return (code >= 32 && code <= 126) || // ASCII Printable
+           (code >= 160 && code <= 255) || // Extended Latin
+           (code === 8217 || code === 8216 || code === 8220 || code === 8221 || code === 8211); // Smart quotes/dashes
+  };
+
+  // PASS 1: Scan for UTF-16LE (Standard for modern .doc files)
+  // In UTF-16LE, ASCII chars are stored as [char_code, 0x00]
+  for (let i = 0; i < fileSize - 1; i += 2) {
+    const charCode = dataView.getUint16(i, true); // Little Endian
+    
+    if (isReadable(charCode)) {
+      currentRun += String.fromCharCode(charCode);
+    } else if (charCode === 13 || charCode === 10) {
+      // Carriage return found - push paragraph if it's substantial
+      if (currentRun.trim().length > 3) {
+        paragraphs.push(currentRun.trim());
+      }
+      currentRun = "";
+    } else {
+      // Hit binary garbage. If run was long enough, save it.
+      if (currentRun.trim().length > 8) { // Require longer runs to avoid metadata noise
+        paragraphs.push(currentRun.trim());
+      }
+      currentRun = "";
+    }
+  }
+
+  // PASS 2: Fallback for older ANSI/ASCII docs if Pass 1 failed
+  if (paragraphs.length < 2) {
+    paragraphs = []; // Reset
+    currentRun = "";
+    const uint8 = new Uint8Array(arrayBuffer);
+    for (let i = 0; i < fileSize; i++) {
+      const charCode = uint8[i];
+      if (isReadable(charCode)) {
+        currentRun += String.fromCharCode(charCode);
+      } else if (charCode === 13 || charCode === 10) {
+        if (currentRun.trim().length > 3) paragraphs.push(currentRun.trim());
+        currentRun = "";
+      } else {
+        if (currentRun.trim().length > 8) paragraphs.push(currentRun.trim());
+        currentRun = "";
+      }
+    }
+  }
+
+  // Formatting: Wrap in HTML
+  if (paragraphs.length === 0) {
+    return `<p style="color:red; text-align:center;"><em>Unable to detect readable text. This file might be password protected or contain only images.</em></p>`;
+  }
+
+  // Join paragraphs with proper spacing
+  return paragraphs
+    .filter(p => !p.match(/^[\s\W]+$/)) // Remove lines that are just symbols
+    .map(p => `<p class="MsoNormal">${p}</p>`)
+    .join("\n");
+};
+
+/**
+ * Enhanced Word to PDF converter.
+ * Supports: 
+ * - .docx (Office 2007+) via Mammoth (XML Parser)
+ * - .doc (Office 97-2003) via Binary Stream Scraper
+ */
 export const convertWordToPDF = async (file: File): Promise<Blob> => {
   const arrayBuffer = await file.arrayBuffer();
-  const convertToHtml = (mammoth as any).convertToHtml || mammoth.convertToHtml;
-  const result = await convertToHtml({ arrayBuffer });
-  const html = result.value;
+  let htmlContent = '';
 
-  const element = document.createElement('div');
-  element.innerHTML = `<div style="padding:20px; font-family:sans-serif;">${html}</div>`;
-  
-  // @ts-ignore
-  if (typeof window.html2pdf !== 'function') throw new Error("html2pdf library missing");
+  // 1. Detect format by Signature
+  const headerArr = new Uint8Array(arrayBuffer.slice(0, 4));
+  const header = Array.from(headerArr).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+  const isLegacyDoc = header === 'D0CF11E0' || file.name.toLowerCase().endsWith('.doc');
 
+  if (isLegacyDoc) {
+    // === LEGACY .DOC PROCESSING ===
+    console.log("Processing legacy .doc file using Binary Stream Scraper...");
+    htmlContent = extractLegacyDocText(arrayBuffer);
+    
+    // Check if extraction actually got content, else fallback message
+    if (!htmlContent || htmlContent.length < 50) {
+       htmlContent += `<p style="margin-top:20px; font-size:10pt; color:#666; border-top:1px solid #eee; padding-top:10px;">[End of Extracted Content from Legacy Binary File]</p>`;
+    }
+  } else {
+    // === MODERN .DOCX PROCESSING ===
+    try {
+      const convertToHtml = (mammoth as any).convertToHtml || mammoth.convertToHtml;
+      const result = await convertToHtml({ 
+        arrayBuffer,
+        styleMap: [
+          "p[style-name='Heading 1'] => h1:fresh",
+          "p[style-name='Heading 2'] => h2:fresh",
+          "p[style-name='Heading 3'] => h3:fresh",
+          "p[style-name='Title'] => h1.doc-main-title:fresh",
+          "p[style-name='Subtitle'] => p.doc-subtitle:fresh",
+          "r[style-name='Strong'] => strong",
+          "b => strong",
+          "i => em",
+          "u => u",
+          "table => table.doc-table"
+        ]
+      });
+      htmlContent = result.value;
+      
+      if (!htmlContent || !htmlContent.trim()) {
+        // Double check: if mammoth fails silently, try the binary scraper as a fallback even for docx
+        // (Unlikely, but safety net)
+        throw new Error("Empty result");
+      }
+    } catch (err: any) {
+      console.warn("Mammoth failed, trying binary extraction as fallback", err);
+      htmlContent = extractLegacyDocText(arrayBuffer);
+    }
+  }
+
+  // 2. Stylized HTML Container for PDF Generation
+  const container = document.createElement('div');
+  container.innerHTML = `
+    <div style="font-family: 'Calibri', 'Arial', sans-serif; color: #000; line-height: 1.6; font-size: 11pt; padding: 0; background: white;">
+      <style>
+        h1 { color: #2F5496; font-size: 20pt; margin-top: 24pt; margin-bottom: 12pt; font-weight: bold; }
+        h2 { color: #2F5496; font-size: 16pt; margin-top: 18pt; margin-bottom: 8pt; font-weight: bold; }
+        h3 { color: #1F3763; font-size: 14pt; margin-top: 14pt; margin-bottom: 6pt; font-weight: bold; }
+        .doc-main-title { font-size: 26pt; text-align: center; color: #000; margin-bottom: 30pt; line-height: 1.2; }
+        .doc-subtitle { font-size: 14pt; text-align: center; color: #5A5A5A; margin-bottom: 30pt; }
+        p.MsoNormal { margin-bottom: 12pt; text-align: left; }
+        p { margin-bottom: 10pt; }
+        
+        /* Table Styling */
+        table { width: 100%; border-collapse: collapse; margin: 15px 0; border: 1px solid #d1d5db; }
+        td, th { border: 1px solid #d1d5db; padding: 8px 12px; vertical-align: top; }
+        th { background-color: #f9fafb; font-weight: 600; }
+        
+        /* List Styling */
+        ul, ol { margin-bottom: 10pt; padding-left: 24pt; }
+        li { margin-bottom: 4pt; }
+        
+        img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
+      </style>
+      ${htmlContent}
+    </div>
+  `;
+
+  // 3. Convert to PDF using html2pdf
   // @ts-ignore
-  return await window.html2pdf().set({
-    margin: 10,
-    filename: file.name.replace(/\.docx?$/i, '.pdf'),
+  if (typeof window.html2pdf !== 'function') throw new Error("PDF Generation engine (html2pdf) not loaded.");
+
+  const opt = {
+    margin: [15, 15, 15, 15], // mm
+    filename: file.name.replace(/\.(docx?|doc)$/i, '.pdf'),
+    image: { type: 'jpeg', quality: 0.98 },
+    html2canvas: { scale: 2, useCORS: true, letterRendering: true },
     jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-  }).from(element).output('blob');
+  };
+
+  // @ts-ignore
+  return await window.html2pdf().set(opt).from(container).output('blob');
 };
 
 export const imagesToPDF = async (files: File[]): Promise<Blob> => {
@@ -225,7 +381,6 @@ export const saveAnnotatedPDF = async (file: File, edits: PDFEdits): Promise<Blo
       } else if (edit.type === 'drawing' && edit.path && edit.path.length > 1) {
         const color = hexToRgb(edit.color || '#000000');
         const path = edit.path;
-        // Draw connected lines for the path
         for (let i = 0; i < path.length - 1; i++) {
           const start = path[i];
           const end = path[i+1];

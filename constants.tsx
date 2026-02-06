@@ -92,12 +92,12 @@ export const TOOLS: ToolConfig[] = [
   {
     id: 'word-to-pdf',
     name: 'Word to PDF',
-    description: 'Make DOCX files into easy to read PDF locally.',
+    description: 'Convert DOC/DOCX files to professional PDF locally.',
     icon: FileType,
     path: '/word-to-pdf',
     category: ToolCategory.CONVERT_TO,
     acceptsMultiple: false,
-    acceptsTypes: '.docx',
+    acceptsTypes: '.docx,.doc',
     color: 'bg-blue-700'
   },
   {
