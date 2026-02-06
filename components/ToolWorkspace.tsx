@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ToolConfig, UploadedFile, ChatMessage } from '../types';
 import { Trash2, ArrowRight, Download, RotateCw, File as FileIcon, Loader2, Send, Sparkles, AlertCircle, RefreshCcw, CheckCircle2, ShieldCheck } from 'lucide-react';
 import { generatePDFAnalysis, fileToGenerativePart, convertPDFToDoc, convertPDFToExcel, convertJPGToWordOCR } from '../services/geminiService';
-import { mergePDFs, splitPDF, rotatePDF, convertWordToPDF, imagesToPDF, pdfToImages, addWatermark, addPageNumbers, cropPDF, repairPDF, removeWatermarks } from '../services/pdfUtils';
+import { mergePDFs, splitPDF, rotatePDF, convertWordToPDF, imagesToPDF, pdfToImages, addWatermark, addPageNumbers, cropPDF, repairPDF, removeWatermarks, addHeaderFooter } from '../services/pdfUtils';
 import * as XLSX from 'xlsx';
 import { PDFEditor } from './PDFEditor';
 
@@ -24,6 +24,11 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
   
   const [rotationAngle, setRotationAngle] = useState(0);
   const [watermarkText, setWatermarkText] = useState('CONFIDENTIAL');
+  const [pageNumberColor, setPageNumberColor] = useState('#000000');
+  
+  const [headerText, setHeaderText] = useState('');
+  const [footerText, setFooterText] = useState('');
+  const [headerFooterColor, setHeaderFooterColor] = useState('#000000');
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
@@ -93,8 +98,12 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
           resultName = `clean_${files[0].file.name}`;
           break;
         case 'page-numbers':
-          resultBlob = await addPageNumbers(files[0].file);
+          resultBlob = await addPageNumbers(files[0].file, pageNumberColor);
           resultName = `numbered_${files[0].file.name}`;
+          break;
+        case 'header-footer':
+          resultBlob = await addHeaderFooter(files[0].file, headerText, footerText, headerFooterColor);
+          resultName = `header_footer_${files[0].file.name}`;
           break;
         case 'jpg-to-pdf':
           resultBlob = await imagesToPDF(files.map(f => f.file));
@@ -379,6 +388,76 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
                 className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-8 py-5 focus:bg-white focus:border-brand-500 outline-none transition-all text-lg font-bold text-slate-900 shadow-inner" 
                 placeholder="e.g. HIGHLY CONFIDENTIAL"
               />
+            </div>
+          )}
+          
+          {tool.id === 'page-numbers' && (
+             <div className="p-8 bg-slate-50/50 rounded-[2rem] border border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-6">
+              <div className="text-center sm:text-left">
+                <h4 className="font-bold text-slate-900 mb-1 text-lg">Page Number Appearance</h4>
+                <p className="text-sm text-slate-500 font-medium">Customize the color of the page numbers.</p>
+              </div>
+              <div className="flex items-center gap-4 bg-white p-3 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                <div 
+                  className="w-12 h-12 rounded-xl border border-slate-200 shadow-inner" 
+                  style={{ backgroundColor: pageNumberColor }}
+                />
+                <div className="flex flex-col">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Text Color</span>
+                  <input 
+                    type="color" 
+                    value={pageNumberColor}
+                    onChange={(e) => setPageNumberColor(e.target.value)}
+                    className="w-24 h-8 cursor-pointer bg-transparent"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {tool.id === 'header-footer' && (
+            <div className="space-y-8">
+               <div className="grid md:grid-cols-2 gap-8">
+                 <div className="space-y-3">
+                    <label className="text-[10px] font-black text-slate-400 uppercase px-1 tracking-widest">Header Text</label>
+                    <input 
+                      type="text" 
+                      value={headerText} 
+                      onChange={e => setHeaderText(e.target.value)} 
+                      className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-6 py-4 focus:bg-white focus:border-cyan-500 outline-none transition-all font-bold text-slate-900 shadow-inner" 
+                      placeholder="Top of page..."
+                    />
+                 </div>
+                 <div className="space-y-3">
+                    <label className="text-[10px] font-black text-slate-400 uppercase px-1 tracking-widest">Footer Text</label>
+                    <input 
+                      type="text" 
+                      value={footerText} 
+                      onChange={e => setFooterText(e.target.value)} 
+                      className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-6 py-4 focus:bg-white focus:border-cyan-500 outline-none transition-all font-bold text-slate-900 shadow-inner" 
+                      placeholder="Bottom of page..."
+                    />
+                 </div>
+               </div>
+
+               <div className="p-6 bg-slate-50/50 rounded-[2rem] border border-slate-100 flex items-center justify-between">
+                  <div>
+                    <h4 className="font-bold text-slate-900 mb-1">Text Color</h4>
+                    <p className="text-xs text-slate-500 font-medium">Applies to both header and footer.</p>
+                  </div>
+                  <div className="flex items-center gap-4 bg-white p-3 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                    <div 
+                      className="w-10 h-10 rounded-xl border border-slate-200 shadow-inner" 
+                      style={{ backgroundColor: headerFooterColor }}
+                    />
+                    <input 
+                      type="color" 
+                      value={headerFooterColor}
+                      onChange={(e) => setHeaderFooterColor(e.target.value)}
+                      className="w-20 h-8 cursor-pointer bg-transparent"
+                    />
+                  </div>
+               </div>
             </div>
           )}
         </div>

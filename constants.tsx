@@ -2,7 +2,7 @@
 import { 
   Merge, Split, Minimize2, FileText, Image, Table, MonitorPlay, 
   RefreshCw, Lock, Unlock, BrainCircuit, FileType, ScanText,
-  FileCode, Scissors, Diff, Hammer, FilePlus, Eraser, Hash, Crop, ShieldCheck, FilePenLine
+  FileCode, Scissors, Diff, Hammer, FilePlus, Eraser, Hash, Crop, ShieldCheck, FilePenLine, PanelTop
 } from 'lucide-react';
 import { ToolConfig, ToolCategory } from './types';
 
@@ -123,6 +123,17 @@ export const TOOLS: ToolConfig[] = [
     acceptsMultiple: false,
     acceptsTypes: '.pdf',
     color: 'bg-indigo-600'
+  },
+  {
+    id: 'header-footer',
+    name: 'Header & Footer',
+    description: 'Add custom headers and footers to your pages.',
+    icon: PanelTop,
+    path: '/header-footer',
+    category: ToolCategory.EDIT,
+    acceptsMultiple: false,
+    acceptsTypes: '.pdf',
+    color: 'bg-cyan-600'
   },
   {
     id: 'compress',

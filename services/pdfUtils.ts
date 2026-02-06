@@ -433,19 +433,61 @@ export const addWatermark = async (file: File, text: string): Promise<Blob> => {
   return new Blob([await pdfDoc.save()], { type: 'application/pdf' });
 };
 
-export const addPageNumbers = async (file: File): Promise<Blob> => {
+export const addPageNumbers = async (file: File, colorHex: string = '#000000'): Promise<Blob> => {
   const arrayBuffer = await file.arrayBuffer();
   const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const pages = pdfDoc.getPages();
+  const color = hexToRgb(colorHex);
+  
   pages.forEach((page, idx) => {
     page.drawText(`Page ${idx + 1} of ${pages.length}`, {
       x: page.getWidth() / 2 - 30,
       y: 20,
       size: 10,
       font,
+      color: rgb(color.r, color.g, color.b),
     });
   });
+  return new Blob([await pdfDoc.save()], { type: 'application/pdf' });
+};
+
+export const addHeaderFooter = async (file: File, headerText: string, footerText: string, colorHex: string = '#000000'): Promise<Blob> => {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const pages = pdfDoc.getPages();
+  const color = hexToRgb(colorHex);
+
+  pages.forEach(page => {
+    const { width, height } = page.getSize();
+    const fontSize = 10;
+    
+    // Draw Header
+    if (headerText) {
+      const headerWidth = font.widthOfTextAtSize(headerText, fontSize);
+      page.drawText(headerText, {
+        x: (width - headerWidth) / 2, // Center
+        y: height - 20,
+        size: fontSize,
+        font,
+        color: rgb(color.r, color.g, color.b),
+      });
+    }
+
+    // Draw Footer
+    if (footerText) {
+      const footerWidth = font.widthOfTextAtSize(footerText, fontSize);
+      page.drawText(footerText, {
+        x: (width - footerWidth) / 2, // Center
+        y: 20,
+        size: fontSize,
+        font,
+        color: rgb(color.r, color.g, color.b),
+      });
+    }
+  });
+
   return new Blob([await pdfDoc.save()], { type: 'application/pdf' });
 };
 
