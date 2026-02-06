@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { ToolConfig, UploadedFile, ChatMessage } from '../types';
-import { Trash2, ArrowRight, Download, RotateCw, File as FileIcon, Loader2, Send, Sparkles, AlertCircle, RefreshCcw, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { Trash2, ArrowRight, Download, RotateCw, File as FileIcon, Loader2, Send, Sparkles, AlertCircle, RefreshCcw, CheckCircle2, ShieldCheck, AlignLeft, AlignCenter, AlignRight } from 'lucide-react';
 import { generatePDFAnalysis, fileToGenerativePart, convertPDFToDoc, convertPDFToExcel, convertJPGToWordOCR } from '../services/geminiService';
 import { mergePDFs, splitPDF, rotatePDF, convertWordToPDF, imagesToPDF, pdfToImages, addWatermark, addPageNumbers, cropPDF, repairPDF, removeWatermarks, addHeaderFooter } from '../services/pdfUtils';
 import * as XLSX from 'xlsx';
@@ -29,6 +29,8 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
   const [headerText, setHeaderText] = useState('');
   const [footerText, setFooterText] = useState('');
   const [headerFooterColor, setHeaderFooterColor] = useState('#000000');
+  const [headerAlign, setHeaderAlign] = useState<'left' | 'center' | 'right'>('center');
+  const [footerAlign, setFooterAlign] = useState<'left' | 'center' | 'right'>('center');
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
@@ -102,7 +104,7 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
           resultName = `numbered_${files[0].file.name}`;
           break;
         case 'header-footer':
-          resultBlob = await addHeaderFooter(files[0].file, headerText, footerText, headerFooterColor);
+          resultBlob = await addHeaderFooter(files[0].file, headerText, footerText, headerFooterColor, headerAlign, footerAlign);
           resultName = `header_footer_${files[0].file.name}`;
           break;
         case 'jpg-to-pdf':
@@ -418,8 +420,15 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
           {tool.id === 'header-footer' && (
             <div className="space-y-8">
                <div className="grid md:grid-cols-2 gap-8">
-                 <div className="space-y-3">
-                    <label className="text-[10px] font-black text-slate-400 uppercase px-1 tracking-widest">Header Text</label>
+                 <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                       <label className="text-[10px] font-black text-slate-400 uppercase px-1 tracking-widest">Header</label>
+                       <div className="flex bg-slate-100 p-1 rounded-lg">
+                          <button onClick={() => setHeaderAlign('left')} className={`p-1.5 rounded-md ${headerAlign === 'left' ? 'bg-white shadow text-slate-900' : 'text-slate-400'}`}><AlignLeft size={14} /></button>
+                          <button onClick={() => setHeaderAlign('center')} className={`p-1.5 rounded-md ${headerAlign === 'center' ? 'bg-white shadow text-slate-900' : 'text-slate-400'}`}><AlignCenter size={14} /></button>
+                          <button onClick={() => setHeaderAlign('right')} className={`p-1.5 rounded-md ${headerAlign === 'right' ? 'bg-white shadow text-slate-900' : 'text-slate-400'}`}><AlignRight size={14} /></button>
+                       </div>
+                    </div>
                     <input 
                       type="text" 
                       value={headerText} 
@@ -428,8 +437,15 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
                       placeholder="Top of page..."
                     />
                  </div>
-                 <div className="space-y-3">
-                    <label className="text-[10px] font-black text-slate-400 uppercase px-1 tracking-widest">Footer Text</label>
+                 <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                       <label className="text-[10px] font-black text-slate-400 uppercase px-1 tracking-widest">Footer</label>
+                       <div className="flex bg-slate-100 p-1 rounded-lg">
+                          <button onClick={() => setFooterAlign('left')} className={`p-1.5 rounded-md ${footerAlign === 'left' ? 'bg-white shadow text-slate-900' : 'text-slate-400'}`}><AlignLeft size={14} /></button>
+                          <button onClick={() => setFooterAlign('center')} className={`p-1.5 rounded-md ${footerAlign === 'center' ? 'bg-white shadow text-slate-900' : 'text-slate-400'}`}><AlignCenter size={14} /></button>
+                          <button onClick={() => setFooterAlign('right')} className={`p-1.5 rounded-md ${footerAlign === 'right' ? 'bg-white shadow text-slate-900' : 'text-slate-400'}`}><AlignRight size={14} /></button>
+                       </div>
+                    </div>
                     <input 
                       type="text" 
                       value={footerText} 

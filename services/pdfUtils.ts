@@ -452,12 +452,20 @@ export const addPageNumbers = async (file: File, colorHex: string = '#000000'): 
   return new Blob([await pdfDoc.save()], { type: 'application/pdf' });
 };
 
-export const addHeaderFooter = async (file: File, headerText: string, footerText: string, colorHex: string = '#000000'): Promise<Blob> => {
+export const addHeaderFooter = async (
+  file: File, 
+  headerText: string, 
+  footerText: string, 
+  colorHex: string = '#000000',
+  headerAlign: 'left' | 'center' | 'right' = 'center',
+  footerAlign: 'left' | 'center' | 'right' = 'center'
+): Promise<Blob> => {
   const arrayBuffer = await file.arrayBuffer();
   const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const pages = pdfDoc.getPages();
   const color = hexToRgb(colorHex);
+  const margin = 30; // Margin from the edges
 
   pages.forEach(page => {
     const { width, height } = page.getSize();
@@ -466,8 +474,13 @@ export const addHeaderFooter = async (file: File, headerText: string, footerText
     // Draw Header
     if (headerText) {
       const headerWidth = font.widthOfTextAtSize(headerText, fontSize);
+      let headerX = (width - headerWidth) / 2;
+      
+      if (headerAlign === 'left') headerX = margin;
+      else if (headerAlign === 'right') headerX = width - headerWidth - margin;
+      
       page.drawText(headerText, {
-        x: (width - headerWidth) / 2, // Center
+        x: headerX,
         y: height - 20,
         size: fontSize,
         font,
@@ -478,8 +491,13 @@ export const addHeaderFooter = async (file: File, headerText: string, footerText
     // Draw Footer
     if (footerText) {
       const footerWidth = font.widthOfTextAtSize(footerText, fontSize);
+      let footerX = (width - footerWidth) / 2;
+      
+      if (footerAlign === 'left') footerX = margin;
+      else if (footerAlign === 'right') footerX = width - footerWidth - margin;
+
       page.drawText(footerText, {
-        x: (width - footerWidth) / 2, // Center
+        x: footerX,
         y: 20,
         size: fontSize,
         font,
