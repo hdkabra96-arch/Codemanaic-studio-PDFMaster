@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ToolConfig, UploadedFile, ChatMessage } from '../types';
 import { Trash2, ArrowRight, Download, RotateCw, File as FileIcon, Loader2, Send, Sparkles, AlertCircle, RefreshCcw, CheckCircle2, ShieldCheck } from 'lucide-react';
 import { generatePDFAnalysis, fileToGenerativePart, convertPDFToDoc, convertPDFToExcel, convertJPGToWordOCR } from '../services/geminiService';
-import { mergePDFs, splitPDF, rotatePDF, convertWordToPDF, imagesToPDF, pdfToImages, addWatermark, addPageNumbers, cropPDF, repairPDF } from '../services/pdfUtils';
+import { mergePDFs, splitPDF, rotatePDF, convertWordToPDF, imagesToPDF, pdfToImages, addWatermark, addPageNumbers, cropPDF, repairPDF, removeWatermarks } from '../services/pdfUtils';
 import * as XLSX from 'xlsx';
 import { PDFEditor } from './PDFEditor';
 
@@ -88,6 +88,10 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
           resultBlob = await addWatermark(files[0].file, watermarkText);
           resultName = `watermarked_${files[0].file.name}`;
           break;
+        case 'remove-watermark':
+          resultBlob = await removeWatermarks(files[0].file);
+          resultName = `clean_${files[0].file.name}`;
+          break;
         case 'page-numbers':
           resultBlob = await addPageNumbers(files[0].file);
           resultName = `numbered_${files[0].file.name}`;
@@ -102,7 +106,7 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
           break;
         case 'word-to-pdf':
           resultBlob = await convertWordToPDF(files[0].file);
-          resultName = files[0].file.name.replace(/\.docx?$/i, '.pdf');
+          resultName = files[0].file.name.replace(/\.(docx?|doc)$/i, '.pdf');
           break;
         case 'pdf-to-word': {
           const htmlDoc = await convertPDFToDoc('', files[0].file);

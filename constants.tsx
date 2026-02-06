@@ -136,6 +136,17 @@ export const TOOLS: ToolConfig[] = [
     color: 'bg-green-600'
   },
   {
+    id: 'remove-watermark',
+    name: 'Remove Watermark',
+    description: 'Clean PDF artifacts and remove layer-based watermarks.',
+    icon: Eraser,
+    path: '/remove-watermark',
+    category: ToolCategory.EDIT,
+    acceptsMultiple: false,
+    acceptsTypes: '.pdf',
+    color: 'bg-orange-500'
+  },
+  {
     id: 'add-watermark',
     name: 'Add Watermark',
     description: 'Stamp text locally over your PDF pages.',

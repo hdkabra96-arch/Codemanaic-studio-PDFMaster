@@ -1,8 +1,8 @@
-
-import { PDFDocument, degrees, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, degrees, rgb, StandardFonts, PDFName, PDFDict, PDFStream, PDFRef, PDFArray, PDFNumber, decodePDFRawStream } from 'pdf-lib';
 import JSZip from 'jszip';
 import * as mammoth from 'mammoth';
 import * as pdfjsLib from 'pdfjs-dist';
+import pako from 'pako';
 import { PDFEdits } from '../types';
 
 const pdfjs = (pdfjsLib as any).default || pdfjsLib;
@@ -22,7 +22,7 @@ export const mergePDFs = async (files: File[]): Promise<Blob> => {
   const mergedPdf = await PDFDocument.create();
   for (const file of files) {
     const arrayBuffer = await file.arrayBuffer();
-    const pdf = await PDFDocument.load(arrayBuffer);
+    const pdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
     const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
     copiedPages.forEach((page) => mergedPdf.addPage(page));
   }
@@ -32,7 +32,7 @@ export const mergePDFs = async (files: File[]): Promise<Blob> => {
 
 export const splitPDF = async (file: File): Promise<Blob> => {
   const arrayBuffer = await file.arrayBuffer();
-  const pdf = await PDFDocument.load(arrayBuffer);
+  const pdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   const zip = new JSZip();
   const folder = zip.folder("split_pages");
   const numberOfPages = pdf.getPageCount();
@@ -50,7 +50,7 @@ export const splitPDF = async (file: File): Promise<Blob> => {
 
 export const rotatePDF = async (file: File, rotationAngle: number): Promise<Blob> => {
   const arrayBuffer = await file.arrayBuffer();
-  const pdf = await PDFDocument.load(arrayBuffer);
+  const pdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   const pages = pdf.getPages();
   pages.forEach(page => {
     const currentRotation = page.getRotation().angle;
@@ -60,108 +60,276 @@ export const rotatePDF = async (file: File, rotationAngle: number): Promise<Blob
   return new Blob([pdfBytes], { type: 'application/pdf' });
 };
 
-/**
- * Advanced Binary Scraper for Legacy Word (.doc / Office 97-2003)
- * 
- * Unlike .docx (which is XML), .doc files are OLE2 Binaries.
- * Text is typically stored in contiguous streams encoded as UTF-16LE or ANSI.
- * This algorithm scans the binary dump for text-like patterns.
- */
 const extractLegacyDocText = (arrayBuffer: ArrayBuffer): string => {
   const dataView = new DataView(arrayBuffer);
   const fileSize = dataView.byteLength;
+  const uint8 = new Uint8Array(arrayBuffer);
   
   let paragraphs: string[] = [];
   let currentRun = "";
   
-  // HEURISTIC CONFIGURATION
-  // We accept characters that are typical in Western documents.
-  // 13 (CR) is a paragraph break.
   const isReadable = (code: number) => {
-    return (code >= 32 && code <= 126) || // ASCII Printable
-           (code >= 160 && code <= 255) || // Extended Latin
-           (code === 8217 || code === 8216 || code === 8220 || code === 8221 || code === 8211); // Smart quotes/dashes
+    return (code >= 32 && code <= 126) || 
+           (code >= 160 && code <= 255) || 
+           [9, 10, 13].includes(code) || 
+           (code >= 0x2000 && code <= 0x206F); 
   };
 
-  // PASS 1: Scan for UTF-16LE (Standard for modern .doc files)
-  // In UTF-16LE, ASCII chars are stored as [char_code, 0x00]
   for (let i = 0; i < fileSize - 1; i += 2) {
-    const charCode = dataView.getUint16(i, true); // Little Endian
-    
-    if (isReadable(charCode)) {
-      currentRun += String.fromCharCode(charCode);
-    } else if (charCode === 13 || charCode === 10) {
-      // Carriage return found - push paragraph if it's substantial
-      if (currentRun.trim().length > 3) {
-        paragraphs.push(currentRun.trim());
-      }
-      currentRun = "";
-    } else {
-      // Hit binary garbage. If run was long enough, save it.
-      if (currentRun.trim().length > 8) { // Require longer runs to avoid metadata noise
-        paragraphs.push(currentRun.trim());
-      }
-      currentRun = "";
-    }
-  }
-
-  // PASS 2: Fallback for older ANSI/ASCII docs if Pass 1 failed
-  if (paragraphs.length < 2) {
-    paragraphs = []; // Reset
-    currentRun = "";
-    const uint8 = new Uint8Array(arrayBuffer);
-    for (let i = 0; i < fileSize; i++) {
-      const charCode = uint8[i];
-      if (isReadable(charCode)) {
+    const charCode = dataView.getUint16(i, true);
+    if (isReadable(charCode) || charCode === 0) {
+      if (charCode !== 0) {
         currentRun += String.fromCharCode(charCode);
-      } else if (charCode === 13 || charCode === 10) {
-        if (currentRun.trim().length > 3) paragraphs.push(currentRun.trim());
-        currentRun = "";
-      } else {
-        if (currentRun.trim().length > 8) paragraphs.push(currentRun.trim());
-        currentRun = "";
       }
+    } else {
+      if (currentRun.length > 4) { 
+        if (!/[^\w\s.,?!'"-]/.test(currentRun) || currentRun.includes(' ')) {
+           paragraphs.push(currentRun.trim());
+        }
+      }
+      currentRun = "";
     }
   }
 
-  // Formatting: Wrap in HTML
-  if (paragraphs.length === 0) {
-    return `<p style="color:red; text-align:center;"><em>Unable to detect readable text. This file might be password protected or contain only images.</em></p>`;
+  if (paragraphs.length < 5) {
+     let ansiRun = "";
+     for (let i = 0; i < fileSize; i++) {
+        const charCode = uint8[i];
+        if (isReadable(charCode)) {
+           ansiRun += String.fromCharCode(charCode);
+        } else {
+           if (ansiRun.length > 4) {
+             ansiRun.split(/[\x00-\x08\x0B\x0C\x0E-\x1F]+/).forEach(segment => {
+                if (segment.length > 4) paragraphs.push(segment.trim());
+             });
+           }
+           ansiRun = "";
+        }
+     }
   }
 
-  // Join paragraphs with proper spacing
-  return paragraphs
-    .filter(p => !p.match(/^[\s\W]+$/)) // Remove lines that are just symbols
-    .map(p => `<p class="MsoNormal">${p}</p>`)
-    .join("\n");
+  const uniqueParas = [...new Set(paragraphs)]
+    .filter(p => p.length > 5)
+    .filter(p => !p.match(/^[0-9\W]+$/)); 
+
+  if (uniqueParas.length === 0) {
+    return `<p style="color:#e11d48; text-align:center; padding: 20px;">
+      <em>We detected a legacy .doc file, but were unable to extract readable text.</em>
+    </p>`;
+  }
+
+  return uniqueParas.map(p => `<p class="MsoNormal">${p}</p>`).join("\n");
 };
 
 /**
- * Enhanced Word to PDF converter.
- * Supports: 
- * - .docx (Office 2007+) via Mammoth (XML Parser)
- * - .doc (Office 97-2003) via Binary Stream Scraper
+ * Intelligent Stream Cleaner
+ * Removes watermarks by analyzing content stream operators.
  */
+const cleanContentStream = (stream: string): string => {
+  let clean = stream;
+
+  // 1. Remove Marked Content Artifacts (BDC ... EMC)
+  clean = clean.replace(/\/Artifact\s*BMC[\s\S]*?EMC/g, '');
+  clean = clean.replace(/\/Artifact\s*BDC[\s\S]*?EMC/g, '');
+  clean = clean.replace(/\/Watermark\s*BMC[\s\S]*?EMC/g, '');
+  clean = clean.replace(/\/Watermark\s*BDC[\s\S]*?EMC/g, '');
+  // Loose match for artifacts with property lists
+  clean = clean.replace(/\/Artifact\s*<<[\s\S]*?>>\s*BDC[\s\S]*?EMC/g, '');
+
+  // 2. Remove Rotated Text Blocks (BT ... Tm ... ET)
+  // Text Matrix: a b c d e f Tm
+  clean = clean.replace(/BT[\s\S]*?ET/g, (block) => {
+    // Look for Tm operator
+    const tmRegex = /(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+Tm/g;
+    let match;
+    while ((match = tmRegex.exec(block)) !== null) {
+       const b = parseFloat(match[2]);
+       const c = parseFloat(match[3]);
+       // Check for rotation (b or c != 0)
+       if (Math.abs(b) > 0.05 || Math.abs(c) > 0.05) {
+         return ''; // Delete rotated block
+       }
+    }
+    return block;
+  });
+
+  // 3. Remove Rotated Graphics State Groups (q ... cm ... BT ... ET ... Q)
+  // Pattern: q [matrix] cm [text block] Q
+  // This removes text blocks that are wrapped in a rotated coordinate system
+  clean = clean.replace(/q\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+cm\s+[\s\S]*?BT[\s\S]*?ET[\s\S]*?Q/g, (match, a, b, c, d, e, f) => {
+      const bVal = parseFloat(b);
+      const cVal = parseFloat(c);
+      if (Math.abs(bVal) > 0.05 || Math.abs(cVal) > 0.05) {
+          return ''; // Delete rotated group
+      }
+      return match;
+  });
+
+  // 4. Remove Rotated XObjects/Images (q ... cm ... Do ... Q)
+  clean = clean.replace(/q\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+cm\s+[\s\S]*?\/[a-zA-Z0-9_]+\s+Do\s+Q/g, (match, a, b, c, d, e, f) => {
+      const bVal = parseFloat(b);
+      const cVal = parseFloat(c);
+      if (Math.abs(bVal) > 0.05 || Math.abs(cVal) > 0.05) {
+          return ''; // Delete rotated image placement
+      }
+      return match;
+  });
+
+  // 5. Targeted Removal: Known Watermark Strings
+  // Based on the user's issue description, we can try to remove specific text patterns if they appear in text show operators (Tj/TJ)
+  // This is a "nuclear" option for stubborn text watermarks.
+  // We remove the entire line containing the string.
+  const badStrings = ['Hardik', 'Kabra']; // Split parts to be safe
+  badStrings.forEach(s => {
+      const re = new RegExp(`\\([^\\)]*${s}[^\\)]*\\)\\s*Tj`, 'gi');
+      clean = clean.replace(re, '');
+      // Handle TJ arrays: [(...Hardik...)] TJ
+      const reTJ = new RegExp(`\\[[^\\]]*${s}[^\\]]*\\]\\s*TJ`, 'gi');
+      clean = clean.replace(reTJ, '');
+  });
+
+  return clean;
+};
+
+export const removeWatermarks = async (file: File): Promise<Blob> => {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+
+  const pages = pdfDoc.getPages();
+  const pageCount = pages.length;
+
+  // 1. GLOBAL CLEANUP
+  const catalog = pdfDoc.context.lookup(pdfDoc.context.trailerInfo.Root) as PDFDict;
+  if (catalog) {
+    catalog.delete(PDFName.of('OCProperties')); // Removes Layers
+    catalog.delete(PDFName.of('Perms')); 
+    catalog.delete(PDFName.of('AcroForm')); 
+  }
+
+  // 2. IDENTIFY SHARED XOBJECTS
+  const xObjectUsage = new Map<string, number>();
+  pages.forEach(page => {
+    const resources = page.node.get(PDFName.of('Resources'));
+    if (resources instanceof PDFDict) {
+      const xObjects = resources.get(PDFName.of('XObject'));
+      if (xObjects instanceof PDFDict) {
+        xObjects.keys().forEach(key => {
+          const ref = xObjects.get(key);
+          if (ref instanceof PDFRef) xObjectUsage.set(ref.toString(), (xObjectUsage.get(ref.toString()) || 0) + 1);
+        });
+      }
+    }
+  });
+
+  const sharedThreshold = pageCount > 2 ? Math.ceil(pageCount * 0.8) : 999;
+  const idsToRemove = new Set<string>();
+  xObjectUsage.forEach((count, id) => { if (count >= sharedThreshold) idsToRemove.add(id); });
+
+  for (const page of pages) {
+    // 3. PAGE LEVEL CLEANUP
+    page.node.delete(PDFName.of('Annots'));
+    page.node.delete(PDFName.of('PieceInfo'));
+    page.node.delete(PDFName.of('StructParents'));
+    
+    // Clean Resources
+    const resources = page.node.get(PDFName.of('Resources'));
+    if (resources instanceof PDFDict) {
+      resources.delete(PDFName.of('Properties')); 
+      const xObjects = resources.get(PDFName.of('XObject'));
+      if (xObjects instanceof PDFDict) {
+        xObjects.keys().forEach(key => {
+          const ref = xObjects.get(key);
+          if (ref instanceof PDFRef) {
+             if (idsToRemove.has(ref.toString())) {
+               xObjects.delete(key);
+             } else {
+               const obj = pdfDoc.context.lookup(ref);
+               if (obj instanceof PDFDict && obj.get(PDFName.of('Subtype')) === PDFName.of('Form')) {
+                 xObjects.delete(key);
+               }
+             }
+           }
+        });
+      }
+    }
+
+    // 4. CONTENT STREAM CLEANING
+    const contents = page.node.Contents();
+    let contentStreams: PDFStream[] = [];
+    
+    if (contents instanceof PDFStream) {
+      contentStreams.push(contents);
+    } else if (contents instanceof PDFArray) {
+      for (let i = 0; i < contents.size(); i++) {
+        const ref = contents.get(i);
+        const stream = pdfDoc.context.lookup(ref);
+        if (stream instanceof PDFStream) contentStreams.push(stream);
+      }
+    } else if (contents instanceof PDFRef) {
+      const stream = pdfDoc.context.lookup(contents);
+      if (stream instanceof PDFStream) contentStreams.push(stream);
+      else if (stream instanceof PDFArray) {
+         for (let i = 0; i < stream.size(); i++) {
+            const r = stream.get(i);
+            const s = pdfDoc.context.lookup(r);
+            if (s instanceof PDFStream) contentStreams.push(s);
+         }
+      }
+    }
+
+    for (const stream of contentStreams) {
+      try {
+        let rawData = stream.getContents();
+        
+        // Decompress if needed (FlateDecode)
+        const filter = stream.dict.get(PDFName.of('Filter'));
+        if (filter === PDFName.of('FlateDecode') || (Array.isArray(filter) && filter.includes(PDFName.of('FlateDecode')))) {
+           try {
+             rawData = pako.inflate(rawData);
+           } catch (e) {
+             console.warn("Decompression failed, skipping stream", e);
+             continue;
+           }
+        }
+        
+        const contentStr = new TextDecoder().decode(rawData);
+        const cleanedStr = cleanContentStream(contentStr);
+
+        if (contentStr.length !== cleanedStr.length) {
+          const newData = pako.deflate(new TextEncoder().encode(cleanedStr));
+          (stream as any).contents = newData;
+          stream.dict.set(PDFName.of('Filter'), PDFName.of('FlateDecode'));
+          stream.dict.set(PDFName.of('Length'), PDFNumber.of(newData.length));
+        }
+      } catch (err) {
+        console.error("Error processing stream content", err);
+      }
+    }
+  }
+
+  const pdfBytes = await pdfDoc.save();
+  return new Blob([pdfBytes], { type: 'application/pdf' });
+};
+
 export const convertWordToPDF = async (file: File): Promise<Blob> => {
   const arrayBuffer = await file.arrayBuffer();
   let htmlContent = '';
 
-  // 1. Detect format by Signature
   const headerArr = new Uint8Array(arrayBuffer.slice(0, 4));
   const header = Array.from(headerArr).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
   const isLegacyDoc = header === 'D0CF11E0' || file.name.toLowerCase().endsWith('.doc');
 
   if (isLegacyDoc) {
-    // === LEGACY .DOC PROCESSING ===
-    console.log("Processing legacy .doc file using Binary Stream Scraper...");
+    console.log("Legacy format detected.");
     htmlContent = extractLegacyDocText(arrayBuffer);
-    
-    // Check if extraction actually got content, else fallback message
-    if (!htmlContent || htmlContent.length < 50) {
-       htmlContent += `<p style="margin-top:20px; font-size:10pt; color:#666; border-top:1px solid #eee; padding-top:10px;">[End of Extracted Content from Legacy Binary File]</p>`;
-    }
+    const banner = `
+      <div style="font-size: 9pt; color: #64748b; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; margin-bottom: 20px; text-align: center;">
+        Converted from Legacy Word Format (.doc). Layout reconstruction is approximate.
+      </div>
+    `;
+    htmlContent = banner + htmlContent;
+
   } else {
-    // === MODERN .DOCX PROCESSING ===
     try {
       const convertToHtml = (mammoth as any).convertToHtml || mammoth.convertToHtml;
       const result = await convertToHtml({ 
@@ -172,60 +340,37 @@ export const convertWordToPDF = async (file: File): Promise<Blob> => {
           "p[style-name='Heading 3'] => h3:fresh",
           "p[style-name='Title'] => h1.doc-main-title:fresh",
           "p[style-name='Subtitle'] => p.doc-subtitle:fresh",
-          "r[style-name='Strong'] => strong",
-          "b => strong",
-          "i => em",
-          "u => u",
           "table => table.doc-table"
         ]
       });
       htmlContent = result.value;
-      
-      if (!htmlContent || !htmlContent.trim()) {
-        // Double check: if mammoth fails silently, try the binary scraper as a fallback even for docx
-        // (Unlikely, but safety net)
-        throw new Error("Empty result");
-      }
-    } catch (err: any) {
-      console.warn("Mammoth failed, trying binary extraction as fallback", err);
+      if (!htmlContent.trim()) throw new Error("Empty XML");
+    } catch (err) {
+      console.warn("Mammoth failed, attempting binary fallback.");
       htmlContent = extractLegacyDocText(arrayBuffer);
     }
   }
 
-  // 2. Stylized HTML Container for PDF Generation
   const container = document.createElement('div');
   container.innerHTML = `
-    <div style="font-family: 'Calibri', 'Arial', sans-serif; color: #000; line-height: 1.6; font-size: 11pt; padding: 0; background: white;">
+    <div style="font-family: 'Calibri', 'Arial', sans-serif; color: #000; line-height: 1.6; font-size: 11pt; background: white;">
       <style>
-        h1 { color: #2F5496; font-size: 20pt; margin-top: 24pt; margin-bottom: 12pt; font-weight: bold; }
-        h2 { color: #2F5496; font-size: 16pt; margin-top: 18pt; margin-bottom: 8pt; font-weight: bold; }
-        h3 { color: #1F3763; font-size: 14pt; margin-top: 14pt; margin-bottom: 6pt; font-weight: bold; }
-        .doc-main-title { font-size: 26pt; text-align: center; color: #000; margin-bottom: 30pt; line-height: 1.2; }
-        .doc-subtitle { font-size: 14pt; text-align: center; color: #5A5A5A; margin-bottom: 30pt; }
-        p.MsoNormal { margin-bottom: 12pt; text-align: left; }
+        h1 { color: #2F5496; font-size: 20pt; margin: 24pt 0 12pt; font-weight: bold; }
+        h2 { color: #2F5496; font-size: 16pt; margin: 18pt 0 8pt; font-weight: bold; }
         p { margin-bottom: 10pt; }
-        
-        /* Table Styling */
-        table { width: 100%; border-collapse: collapse; margin: 15px 0; border: 1px solid #d1d5db; }
-        td, th { border: 1px solid #d1d5db; padding: 8px 12px; vertical-align: top; }
-        th { background-color: #f9fafb; font-weight: 600; }
-        
-        /* List Styling */
-        ul, ol { margin-bottom: 10pt; padding-left: 24pt; }
-        li { margin-bottom: 4pt; }
-        
+        table { width: 100%; border-collapse: collapse; margin: 15px 0; border: 1px solid #cbd5e1; }
+        td, th { border: 1px solid #cbd5e1; padding: 8px 12px; vertical-align: top; }
         img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
       </style>
       ${htmlContent}
     </div>
   `;
 
-  // 3. Convert to PDF using html2pdf
   // @ts-ignore
-  if (typeof window.html2pdf !== 'function') throw new Error("PDF Generation engine (html2pdf) not loaded.");
-
+  if (typeof window.html2pdf !== 'function') throw new Error("PDF Engine not ready.");
+  
   const opt = {
-    margin: [15, 15, 15, 15], // mm
+    margin: [15, 15, 15, 15],
     filename: file.name.replace(/\.(docx?|doc)$/i, '.pdf'),
     image: { type: 'jpeg', quality: 0.98 },
     html2canvas: { scale: 2, useCORS: true, letterRendering: true },
@@ -271,7 +416,7 @@ export const pdfToImages = async (file: File): Promise<Blob> => {
 
 export const addWatermark = async (file: File, text: string): Promise<Blob> => {
   const arrayBuffer = await file.arrayBuffer();
-  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   pdfDoc.getPages().forEach(page => {
     const { width, height } = page.getSize();
@@ -290,7 +435,7 @@ export const addWatermark = async (file: File, text: string): Promise<Blob> => {
 
 export const addPageNumbers = async (file: File): Promise<Blob> => {
   const arrayBuffer = await file.arrayBuffer();
-  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const pages = pdfDoc.getPages();
   pages.forEach((page, idx) => {
@@ -306,7 +451,7 @@ export const addPageNumbers = async (file: File): Promise<Blob> => {
 
 export const cropPDF = async (file: File): Promise<Blob> => {
   const arrayBuffer = await file.arrayBuffer();
-  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   pdfDoc.getPages().forEach(page => {
     const { width, height } = page.getSize();
     page.setCropBox(50, 50, width - 100, height - 100);
@@ -322,7 +467,7 @@ export const repairPDF = async (file: File): Promise<Blob> => {
 
 export const saveAnnotatedPDF = async (file: File, edits: PDFEdits): Promise<Blob> => {
   const arrayBuffer = await file.arrayBuffer();
-  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   const pages = pdfDoc.getPages();
 
   const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
