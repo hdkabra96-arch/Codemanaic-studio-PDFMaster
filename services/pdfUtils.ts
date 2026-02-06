@@ -3,6 +3,7 @@ import JSZip from 'jszip';
 import * as mammoth from 'mammoth';
 import * as pdfjsLib from 'pdfjs-dist';
 import pako from 'pako';
+import { renderAsync } from 'docx-preview';
 import { PDFEdits } from '../types';
 
 const pdfjs = (pdfjsLib as any).default || pdfjsLib;
@@ -176,14 +177,10 @@ const cleanContentStream = (stream: string): string => {
   });
 
   // 5. Targeted Removal: Known Watermark Strings
-  // Based on the user's issue description, we can try to remove specific text patterns if they appear in text show operators (Tj/TJ)
-  // This is a "nuclear" option for stubborn text watermarks.
-  // We remove the entire line containing the string.
-  const badStrings = ['Hardik', 'Kabra']; // Split parts to be safe
+  const badStrings = ['Hardik', 'Kabra']; 
   badStrings.forEach(s => {
       const re = new RegExp(`\\([^\\)]*${s}[^\\)]*\\)\\s*Tj`, 'gi');
       clean = clean.replace(re, '');
-      // Handle TJ arrays: [(...Hardik...)] TJ
       const reTJ = new RegExp(`\\[[^\\]]*${s}[^\\]]*\\]\\s*TJ`, 'gi');
       clean = clean.replace(reTJ, '');
   });
@@ -313,72 +310,107 @@ export const removeWatermarks = async (file: File): Promise<Blob> => {
 
 export const convertWordToPDF = async (file: File): Promise<Blob> => {
   const arrayBuffer = await file.arrayBuffer();
-  let htmlContent = '';
-
+  
+  // CRITICAL FIX: Append to document body (off-screen) so docx-preview can calculate layout 
+  // correctly (fonts, headers, pagination). If disconnected from DOM, layout fails.
+  const container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.left = '-9999px';
+  container.style.top = '0px';
+  // 794px is exactly A4 width at 96 DPI.
+  container.style.width = '794px'; 
+  container.style.backgroundColor = 'white';
+  document.body.appendChild(container);
+  
+  // Basic Legacy Check
   const headerArr = new Uint8Array(arrayBuffer.slice(0, 4));
   const header = Array.from(headerArr).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
   const isLegacyDoc = header === 'D0CF11E0' || file.name.toLowerCase().endsWith('.doc');
 
-  if (isLegacyDoc) {
-    console.log("Legacy format detected.");
-    htmlContent = extractLegacyDocText(arrayBuffer);
-    const banner = `
-      <div style="font-size: 9pt; color: #64748b; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; margin-bottom: 20px; text-align: center;">
-        Converted from Legacy Word Format (.doc). Layout reconstruction is approximate.
-      </div>
-    `;
-    htmlContent = banner + htmlContent;
-
-  } else {
-    try {
-      const convertToHtml = (mammoth as any).convertToHtml || mammoth.convertToHtml;
-      const result = await convertToHtml({ 
-        arrayBuffer,
-        styleMap: [
-          "p[style-name='Heading 1'] => h1:fresh",
-          "p[style-name='Heading 2'] => h2:fresh",
-          "p[style-name='Heading 3'] => h3:fresh",
-          "p[style-name='Title'] => h1.doc-main-title:fresh",
-          "p[style-name='Subtitle'] => p.doc-subtitle:fresh",
-          "table => table.doc-table"
-        ]
+  try {
+    if (isLegacyDoc) {
+      // Fallback for .doc files using Mammoth
+      console.log("Legacy format detected, falling back to text extraction.");
+      const htmlContent = extractLegacyDocText(arrayBuffer);
+      container.innerHTML = `
+        <div style="padding: 40px; font-family: 'Calibri', 'Arial', sans-serif;">
+          <div style="color: #64748b; border-bottom: 1px solid #e2e8f0; margin-bottom: 20px; font-size: 12px; text-align: center;">
+            Legacy format converted using basic text extraction
+          </div>
+          ${htmlContent}
+        </div>
+      `;
+    } else {
+      // Modern DOCX: Use docx-preview for high-fidelity rendering
+      await renderAsync(arrayBuffer, container, undefined, {
+        className: 'docx_viewer',
+        inWrapper: false, 
+        ignoreWidth: false, 
+        ignoreHeight: false, // Must be false to support pagination/headers correctly
+        ignoreFonts: false, 
+        breakPages: true, 
+        ignoreLastRenderedPageBreak: false,
+        experimental: true,
+        trimXmlDeclaration: true,
+        useBase64URL: true,
+        renderChanges: false,
+        debug: false,
       });
-      htmlContent = result.value;
-      if (!htmlContent.trim()) throw new Error("Empty XML");
-    } catch (err) {
-      console.warn("Mammoth failed, attempting binary fallback.");
-      htmlContent = extractLegacyDocText(arrayBuffer);
+    }
+
+    // Force strict styling to strip viewer chrome and set 0-margin for PDF print
+    const style = document.createElement('style');
+    style.innerHTML = `
+      .docx_wrapper { background: white !important; padding: 0 !important; }
+      .docx_viewer { padding: 0 !important; margin: 0 !important; }
+      
+      /* Ensure pages start exactly at top */
+      section, .docx-page { 
+        margin-top: 0 !important; 
+        margin-bottom: 0 !important; 
+        box-shadow: none !important; 
+        background: white !important;
+      }
+      
+      /* Ensure no horizontal scroll or cutoff */
+      * { box-sizing: border-box; }
+    `;
+    container.prepend(style);
+
+    // @ts-ignore
+    if (typeof window.html2pdf !== 'function') throw new Error("PDF Engine not ready.");
+    
+    const opt = {
+      margin: 0, // docx-preview handles internal margins of the document
+      filename: file.name.replace(/\.(docx?|doc)$/i, '.pdf'),
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { 
+        scale: 2, // High resolution
+        useCORS: true, 
+        letterRendering: true,
+        width: 794, // Lock canvas width to A4 pixel width
+        windowWidth: 794,
+        scrollY: 0, // Capture from top
+        x: 0,
+        y: 0
+      },
+      jsPDF: { 
+        unit: 'pt', 
+        format: 'a4', 
+        orientation: 'portrait' 
+      },
+      pagebreak: { mode: ['css', 'legacy'] }
+    };
+
+    // @ts-ignore
+    return await window.html2pdf().set(opt).from(container).output('blob');
+  
+  } finally {
+    // Clean up DOM
+    if (document.body.contains(container)) {
+      document.body.removeChild(container);
     }
   }
-
-  const container = document.createElement('div');
-  container.innerHTML = `
-    <div style="font-family: 'Calibri', 'Arial', sans-serif; color: #000; line-height: 1.6; font-size: 11pt; background: white;">
-      <style>
-        h1 { color: #2F5496; font-size: 20pt; margin: 24pt 0 12pt; font-weight: bold; }
-        h2 { color: #2F5496; font-size: 16pt; margin: 18pt 0 8pt; font-weight: bold; }
-        p { margin-bottom: 10pt; }
-        table { width: 100%; border-collapse: collapse; margin: 15px 0; border: 1px solid #cbd5e1; }
-        td, th { border: 1px solid #cbd5e1; padding: 8px 12px; vertical-align: top; }
-        img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
-      </style>
-      ${htmlContent}
-    </div>
-  `;
-
-  // @ts-ignore
-  if (typeof window.html2pdf !== 'function') throw new Error("PDF Engine not ready.");
-  
-  const opt = {
-    margin: [15, 15, 15, 15],
-    filename: file.name.replace(/\.(docx?|doc)$/i, '.pdf'),
-    image: { type: 'jpeg', quality: 0.98 },
-    html2canvas: { scale: 2, useCORS: true, letterRendering: true },
-    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-  };
-
-  // @ts-ignore
-  return await window.html2pdf().set(opt).from(container).output('blob');
 };
 
 export const imagesToPDF = async (files: File[]): Promise<Blob> => {
