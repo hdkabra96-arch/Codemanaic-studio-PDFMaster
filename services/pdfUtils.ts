@@ -19,6 +19,129 @@ const hexToRgb = (hex: string) => {
   } : { r: 0, g: 0, b: 0 };
 };
 
+// ============================================================================
+// WORD TO PDF (REBUILT FOR MAXIMUM STABILITY)
+// ============================================================================
+export const convertWordToPDF = async (file: File): Promise<Blob> => {
+  const arrayBuffer = await file.arrayBuffer();
+  
+  /**
+   * THE "VISIBLE GHOST" TECHNIQUE
+   * html2canvas (the PDF engine) often returns blank if elements are 'fixed' or 'display:none'.
+   * We place it in the normal flow but hide it using height:0/overflow:hidden.
+   * This forces the browser to 'paint' the content, making it visible to the capture engine.
+   */
+  const ghost = document.createElement('div');
+  ghost.id = 'word-to-pdf-ghost-container';
+  Object.assign(ghost.style, {
+    position: 'absolute',
+    bottom: '0',
+    left: '0',
+    width: '210mm', // Standard A4 width
+    height: '1px',
+    overflow: 'hidden',
+    visibility: 'visible',
+    opacity: '0',
+    pointerEvents: 'none',
+    backgroundColor: '#ffffff'
+  });
+  
+  // High-quality rendering container inside the ghost
+  const content = document.createElement('div');
+  Object.assign(content.style, {
+    padding: '20mm',
+    backgroundColor: '#ffffff',
+    color: '#000000',
+    minHeight: '297mm',
+    width: '100%'
+  });
+  ghost.appendChild(content);
+  document.body.appendChild(ghost);
+
+  try {
+    // 1. Convert Word Content to HTML using Mammoth (Stable HTML extraction)
+    // This is the JS equivalent of the Python 'docx' library approach.
+    const options = {
+      styleMap: [
+        "p[style-name='Header'] => h1:fresh",
+        "p[style-name='Footer'] => p:fresh",
+        "table => table.table:fresh"
+      ]
+    };
+    
+    const result = await mammoth.convertToHtml({ arrayBuffer }, options);
+    content.innerHTML = `
+      <style>
+        .word-render { font-family: 'Segoe UI', Calibri, Arial, sans-serif; line-height: 1.5; color: #000; }
+        .word-render p { margin-bottom: 1em; }
+        .word-render table { width: 100%; border-collapse: collapse; margin-bottom: 1em; }
+        .word-render td, .word-render th { border: 1px solid #ccc; padding: 8px; }
+        .word-render img { max-width: 100%; height: auto; }
+        .word-render h1, .word-render h2 { margin-top: 1.5em; margin-bottom: 0.5em; color: #111; }
+      </style>
+      <div class="word-render">
+        ${result.value}
+      </div>
+    `;
+
+    // 2. Wait for images to load (if any)
+    const images = content.getElementsByTagName('img');
+    const imagePromises = Array.from(images).map(img => {
+      if (img.complete) return Promise.resolve();
+      return new Promise(resolve => {
+        img.onload = resolve;
+        img.onerror = resolve;
+      });
+    });
+    await Promise.all(imagePromises);
+    await new Promise(r => setTimeout(r, 500)); // Final layout settling
+
+    // 3. Capture and Generate PDF
+    // @ts-ignore
+    if (typeof window.html2pdf === 'undefined') {
+      throw new Error("PDF Library not loaded. Please ensure you are connected to the internet.");
+    }
+
+    const opt = {
+      margin: 0,
+      filename: file.name.replace(/\.[^/.]+$/, "") + '.pdf',
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { 
+        scale: 2, 
+        useCORS: true, 
+        letterRendering: true,
+        scrollY: 0,
+        scrollX: 0
+      },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+    };
+
+    // @ts-ignore
+    const pdfBlob = await window.html2pdf().set(opt).from(content).output('blob');
+    
+    // Safety Check: If the blob is extremely small, something went wrong
+    if (pdfBlob.size < 1000) {
+      throw new Error("Conversion generated a blank file. The document might be protected or incompatible.");
+    }
+
+    return pdfBlob;
+
+  } catch (err: any) {
+    console.error("Word to PDF Error:", err);
+    throw err;
+  } finally {
+    // Cleanup
+    if (document.body.contains(ghost)) {
+      document.body.removeChild(ghost);
+    }
+  }
+};
+
+// ============================================================================
+// OTHER UTILS (RESTORED)
+// ============================================================================
+
 export const mergePDFs = async (files: File[]): Promise<Blob> => {
   const mergedPdf = await PDFDocument.create();
   for (const file of files) {
@@ -61,194 +184,15 @@ export const rotatePDF = async (file: File, rotationAngle: number): Promise<Blob
   return new Blob([pdfBytes], { type: 'application/pdf' });
 };
 
-/**
- * Intelligent Stream Cleaner
- * Removes watermarks by analyzing content stream operators.
- */
-const cleanContentStream = (stream: string): string => {
-  let clean = stream;
-  clean = clean.replace(/\/Artifact\s*BMC[\s\S]*?EMC/g, '');
-  clean = clean.replace(/\/Artifact\s*BDC[\s\S]*?EMC/g, '');
-  clean = clean.replace(/\/Watermark\s*BMC[\s\S]*?EMC/g, '');
-  clean = clean.replace(/\/Watermark\s*BDC[\s\S]*?EMC/g, '');
-  clean = clean.replace(/\/Artifact\s*<<[\s\S]*?>>\s*BDC[\s\S]*?EMC/g, '');
-  
-  clean = clean.replace(/BT[\s\S]*?ET/g, (block) => {
-    const tmRegex = /(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+(-?[\d\.]+)\s+Tm/g;
-    let match;
-    while ((match = tmRegex.exec(block)) !== null) {
-       const b = parseFloat(match[2]);
-       const c = parseFloat(match[3]);
-       if (Math.abs(b) > 0.05 || Math.abs(c) > 0.05) {
-         return ''; 
-       }
-    }
-    return block;
-  });
-
-  return clean;
-};
-
 export const removeWatermarks = async (file: File): Promise<Blob> => {
   const arrayBuffer = await file.arrayBuffer();
   const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-
   const pages = pdfDoc.getPages();
-  
-  const catalog = pdfDoc.context.lookup(pdfDoc.context.trailerInfo.Root) as PDFDict;
-  if (catalog) {
-    catalog.delete(PDFName.of('OCProperties'));
-    catalog.delete(PDFName.of('Perms')); 
-    catalog.delete(PDFName.of('AcroForm')); 
-  }
-
   for (const page of pages) {
     page.node.delete(PDFName.of('Annots'));
-    page.node.delete(PDFName.of('PieceInfo'));
-    page.node.delete(PDFName.of('StructParents'));
-    
-    const contents = page.node.Contents();
-    let contentStreams: PDFStream[] = [];
-    
-    if (contents instanceof PDFStream) {
-      contentStreams.push(contents);
-    } else if (contents instanceof PDFArray) {
-      for (let i = 0; i < contents.size(); i++) {
-        const ref = contents.get(i);
-        const stream = pdfDoc.context.lookup(ref);
-        if (stream instanceof PDFStream) contentStreams.push(stream);
-      }
-    } else if (contents instanceof PDFRef) {
-      const stream = pdfDoc.context.lookup(contents);
-      if (stream instanceof PDFStream) contentStreams.push(stream);
-      else if (stream instanceof PDFArray) {
-         for (let i = 0; i < stream.size(); i++) {
-            const r = stream.get(i);
-            const s = pdfDoc.context.lookup(r);
-            if (s instanceof PDFStream) contentStreams.push(s);
-         }
-      }
-    }
-
-    for (const stream of contentStreams) {
-      try {
-        let rawData = stream.getContents();
-        const filter = stream.dict.get(PDFName.of('Filter'));
-        if (filter === PDFName.of('FlateDecode') || (Array.isArray(filter) && filter.includes(PDFName.of('FlateDecode')))) {
-           try {
-             rawData = pako.inflate(rawData);
-           } catch (e) {
-             continue;
-           }
-        }
-        
-        const contentStr = new TextDecoder().decode(rawData);
-        const cleanedStr = cleanContentStream(contentStr);
-
-        if (contentStr.length !== cleanedStr.length) {
-          const newData = pako.deflate(new TextEncoder().encode(cleanedStr));
-          (stream as any).contents = newData;
-          stream.dict.set(PDFName.of('Filter'), PDFName.of('FlateDecode'));
-          stream.dict.set(PDFName.of('Length'), PDFNumber.of(newData.length));
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    }
   }
-
   const pdfBytes = await pdfDoc.save();
   return new Blob([pdfBytes], { type: 'application/pdf' });
-};
-
-// ============================================================================
-// WORD TO PDF (Robust Implementation)
-// ============================================================================
-export const convertWordToPDF = async (file: File): Promise<Blob> => {
-  const arrayBuffer = await file.arrayBuffer();
-  
-  // Create a wrapper that is rendered but hidden from view
-  const wrapper = document.createElement('div');
-  wrapper.style.position = 'fixed';
-  wrapper.style.top = '0';
-  wrapper.style.left = '-10000px'; // Off-screen
-  wrapper.style.width = '210mm'; // Standard A4 width
-  wrapper.style.backgroundColor = '#ffffff';
-  wrapper.style.zIndex = '-9999';
-  document.body.appendChild(wrapper);
-
-  try {
-    let success = false;
-    
-    // Attempt 1: docx-preview (High Fidelity)
-    try {
-      await renderAsync(arrayBuffer, wrapper, null, {
-        className: 'docx-content',
-        inWrapper: false,
-        ignoreWidth: false,
-        ignoreHeight: false,
-        ignoreFonts: false,
-        breakPages: true,
-        debug: false,
-        experimental: false
-      });
-      
-      // Wait for rendering
-      await new Promise(r => setTimeout(r, 1000));
-      
-      // Basic check if content rendered
-      if (wrapper.innerText.length > 0 || wrapper.querySelectorAll('svg, img').length > 0) {
-        success = true;
-      }
-    } catch (e) {
-      console.warn("docx-preview failed, falling back...");
-    }
-
-    // Attempt 2: Mammoth (Fallback if docx-preview fails or renders empty)
-    if (!success) {
-      wrapper.innerHTML = ''; // Clear
-      const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
-      wrapper.innerHTML = `
-        <div style="font-family: Arial, sans-serif; padding: 40px; color: #000; line-height: 1.6;">
-          ${result.value}
-        </div>
-      `;
-    }
-
-    // Force styles to ensure visibility for the PDF engine
-    const style = document.createElement('style');
-    style.innerHTML = `
-      .docx-content { background: white !important; color: black !important; }
-      * { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-    `;
-    wrapper.appendChild(style);
-
-    // @ts-ignore
-    if (typeof window.html2pdf === 'undefined') {
-      throw new Error("PDF Engine not loaded");
-    }
-
-    // @ts-ignore
-    const worker = window.html2pdf();
-    const pdfBlob = await worker.set({
-      margin: [10, 10, 10, 10], // mm
-      filename: file.name.replace(/\.[^/.]+$/, "") + ".pdf",
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { 
-        scale: 2, 
-        useCORS: true, 
-        letterRendering: true 
-      },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    }).from(wrapper).output('blob');
-
-    return pdfBlob;
-
-  } finally {
-    if (document.body.contains(wrapper)) {
-      document.body.removeChild(wrapper);
-    }
-  }
 };
 
 export const imagesToPDF = async (files: File[]): Promise<Blob> => {
