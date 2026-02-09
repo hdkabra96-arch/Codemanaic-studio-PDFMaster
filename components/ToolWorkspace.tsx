@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ToolConfig, UploadedFile, ChatMessage } from '../types';
 import { Trash2, ArrowRight, Download, RotateCw, File as FileIcon, Loader2, Send, Sparkles, AlertCircle, RefreshCcw, CheckCircle2, ShieldCheck, AlignLeft, AlignCenter, AlignRight } from 'lucide-react';
-import { generatePDFAnalysis, fileToGenerativePart, convertPDFToDoc, convertPDFToExcel, convertJPGToWordOCR } from '../services/geminiService';
+import { generatePDFAnalysis, fileToGenerativePart, convertPDFToDoc, convertPDFToExcel, extractImageTextDataForPython } from '../services/geminiService';
+import { createDocxWithPython } from '../services/pythonService';
 import { mergePDFs, splitPDF, rotatePDF, convertWordToPDF, imagesToPDF, pdfToImages, addWatermark, addPageNumbers, cropPDF, repairPDF, removeWatermarks, addHeaderFooter } from '../services/pdfUtils';
 import * as XLSX from 'xlsx';
 import { PDFEditor } from './PDFEditor';
@@ -137,10 +138,11 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
           break;
         }
         case 'jpg-to-word': {
-          const base64 = await fileToGenerativePart(files[0].file);
-          const html = await convertJPGToWordOCR(base64, files[0].file.type);
-          resultBlob = new Blob([html], { type: 'application/msword' });
-          resultName = files[0].file.name.replace(/\.[^/.]+$/, "") + '.doc';
+          // Use advanced OCR extraction and Python DOCX generation
+          const data = await extractImageTextDataForPython(files[0].file);
+          const docxBytes = await createDocxWithPython(data);
+          resultBlob = new Blob([docxBytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+          resultName = files[0].file.name.replace(/\.[^/.]+$/, "") + '.docx';
           break;
         }
         default:
@@ -315,7 +317,7 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
           <div className="absolute inset-0 flex items-center justify-center font-display text-3xl font-black text-slate-900">{Math.round(progress)}%</div>
         </div>
         <h3 className="text-3xl font-black text-slate-900 mb-4 tracking-tight">Processing...</h3>
-        <p className="text-slate-400 text-lg font-medium animate-pulse">Running Python {tool.id === 'pdf-to-word' ? '(python-docx)' : ''} engine locally...</p>
+        <p className="text-slate-400 text-lg font-medium animate-pulse">Running Python {tool.id === 'pdf-to-word' || tool.id === 'jpg-to-word' ? '(python-docx)' : ''} engine locally...</p>
       </div>
     );
   }

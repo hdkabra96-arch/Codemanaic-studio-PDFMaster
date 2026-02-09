@@ -37,13 +37,13 @@ export const initPyodide = async () => {
 export const createDocxWithPython = async (data: any): Promise<Uint8Array> => {
   const py = await initPyodide();
   
-  // Robust Python Script to Generate DOCX
+  // Robust Python Script to Generate DOCX with formatting
   const script = `
 import json
 import io
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
 
 def create_docx(json_str):
     try:
@@ -56,49 +56,75 @@ def create_docx(json_str):
         font.name = 'Calibri'
         font.size = Pt(11)
         
-        # Set narrow margins for better PDF replication
+        # Set narrow margins
         for section in doc.sections:
             section.top_margin = Inches(0.5)
             section.bottom_margin = Inches(0.5)
-            section.left_margin = Inches(0.75)
-            section.right_margin = Inches(0.75)
+            section.left_margin = Inches(0.5)
+            section.right_margin = Inches(0.5)
 
         if not data:
-            doc.add_paragraph("Error: No content extracted from PDF.")
+            doc.add_paragraph("Error: No content extracted.")
 
         for page in data:
-            blocks = page.get('blocks', [])
-            if not blocks:
-                # Add a blank page if extraction failed for a specific page
-                doc.add_page_break()
-                continue
+            lines = page.get('lines', [])
+            
+            # Use 'Normal' style paragraphs but override properties
+            for line in lines:
+                spans = line.get('spans', [])
+                if not spans: continue
                 
-            for block in blocks:
-                # Create paragraph
+                # Create paragraph for the line
                 p = doc.add_paragraph()
-                p_format = p.paragraph_format
-                p_format.space_after = Pt(6) 
+                pf = p.paragraph_format
                 
-                for span in block.get('spans', []):
-                    text_content = span.get('text', '')
-                    if not text_content: continue
+                # 1. Base Indentation (Left align the whole line to first element)
+                start_x = max(0, spans[0].get('x', 0))
+                pf.left_indent = Pt(start_x)
+                
+                # Minimal vertical spacing to mimic layout
+                pf.space_before = Pt(0)
+                pf.space_after = Pt(0)
+                
+                current_cursor_x = start_x
+                
+                for i, span in enumerate(spans):
+                    text = span.get('text', '')
+                    span_x = span.get('x', 0)
+                    span_width = span.get('width', 0)
                     
-                    run = p.add_run(text_content)
-                    run_font = run.font
-                    
-                    # Size (default to 11 if missing)
-                    size = span.get('fontSize', 11)
-                    if size > 0:
-                        run_font.size = Pt(size)
-                    
-                    # Bold
-                    if span.get('isBold'):
-                        run_font.bold = True
+                    # If this is not the first item, check if we need a Tab
+                    # We add a tab if there is a gap > 5 pts
+                    if i > 0:
+                        # Use width-based cursor tracking if available
+                        threshold = 5 
                         
-            # Add page break to match PDF pagination
+                        if span_x > current_cursor_x + threshold: 
+                            p.add_run('\t')
+                            # Tab stops are relative to the margin in Word, not the indent.
+                            # So we set the tab stop at the absolute X position of the span.
+                            pf.tab_stops.add_tab_stop(Pt(span_x), WD_TAB_ALIGNMENT.LEFT)
+                            current_cursor_x = span_x
+
+                    run = p.add_run(text)
+                    r_font = run.font
+                    
+                    # Formatting
+                    size = span.get('size', 11)
+                    if size > 0: r_font.size = Pt(size)
+                    if span.get('isBold'): r_font.bold = True
+                    
+                    # Update approximate cursor X
+                    if span_width > 0:
+                        current_cursor_x += span_width
+                    else:
+                        # Fallback calculation if width is missing
+                        char_width_est = size * 0.5 
+                        current_cursor_x += len(text) * char_width_est
+
+            # Page break after processing all lines of a page
             doc.add_page_break()
 
-        # Save to memory
         file_stream = io.BytesIO()
         doc.save(file_stream)
         file_stream.seek(0)
@@ -115,11 +141,9 @@ def create_docx(json_str):
   const proxy = await py.globals.get('create_docx')(jsonStr);
   
   if (typeof proxy === 'string') {
-      // If it returned a string, it's an error message
       throw new Error("Python Generation Failed: " + proxy);
   }
   
-  // Convert Python bytes to JS Uint8Array
   const result = proxy.toJs();
   proxy.destroy();
   
