@@ -13,6 +13,7 @@ interface Span {
   height: number;
   fontSize: number;
   isBold: boolean;
+  isItalic: boolean;
   fontName: string;
 }
 
@@ -23,7 +24,7 @@ interface Line {
 
 /**
  * Extracts structured data from PDF for Python processing.
- * Focuses on maintaining visual layout (lines, indentation).
+ * Focuses on maintaining visual layout (lines, indentation) and grouping into paragraphs.
  */
 export const extractTextDataForPython = async (file: File) => {
   const arrayBuffer = await file.arrayBuffer();
@@ -42,60 +43,277 @@ export const extractTextDataForPython = async (file: File) => {
     // Check if the page actually has selectable text
     const hasSelectableText = items.some(item => item.str.trim().length > 0);
 
-    const pageLines: Line[] = [];
+    const pageBlocks: any[] = [];
+    let images: any[] = [];
 
     if (hasSelectableText) {
-        // Map items to a normalized structure with Top-Down Y coordinates
+        // --- PRE-PROCESSING: Font Analysis ---
+        const fontSizes: Record<number, number> = {};
+        items.forEach(item => {
+            const size = Math.round(item.transform[0] || item.height || 11);
+            fontSizes[size] = (fontSizes[size] || 0) + item.str.length;
+        });
+        
+        // Find dominant font size (Body Text)
+        let bodyFontSize = 11;
+        let maxCount = 0;
+        Object.entries(fontSizes).forEach(([size, count]) => {
+            if (count > maxCount) {
+                maxCount = count;
+                bodyFontSize = Number(size);
+            }
+        });
+
+        // --- NEW: Image Extraction ---
+        // Note: pdfjsLib is available globally or imported. Assuming imported as pdfjsLib.
+        // We need to access the operator list.
+        const opList = await page.getOperatorList();
+        const imagePromises: Promise<any>[] = [];
+        
+        // Simple matrix multiplication helper
+        const multiply = (m1: number[], m2: number[]) => {
+            return [
+                m1[0] * m2[0] + m1[1] * m2[2],
+                m1[0] * m2[1] + m1[1] * m2[3],
+                m1[2] * m2[0] + m1[3] * m2[2],
+                m1[2] * m2[1] + m1[3] * m2[3],
+                m1[4] * m2[0] + m1[5] * m2[2] + m2[4],
+                m1[4] * m2[1] + m1[5] * m2[3] + m2[5]
+            ];
+        };
+
+        let currentMatrix = [1, 0, 0, 1, 0, 0]; // Identity matrix
+        const transformStack: number[][] = [];
+
+        // Iterate through operators to find images and track transforms
+        for (let i = 0; i < opList.fnArray.length; i++) {
+            const fn = opList.fnArray[i];
+            const args = opList.argsArray[i];
+
+            if (fn === pdfjsLib.OPS.save) {
+                transformStack.push([...currentMatrix]);
+            } else if (fn === pdfjsLib.OPS.restore) {
+                if (transformStack.length > 0) currentMatrix = transformStack.pop()!;
+            } else if (fn === pdfjsLib.OPS.transform) {
+                // args is [a, b, c, d, e, f]
+                currentMatrix = multiply(currentMatrix, args);
+            } else if (fn === pdfjsLib.OPS.paintImageXObject || fn === pdfjsLib.OPS.paintJpegXObject) {
+                const imgName = args[0];
+                const matrix = [...currentMatrix]; // Capture state at this point
+                
+                // We need to fetch the image object asynchronously
+                imagePromises.push(new Promise<any>((resolve) => {
+                    page.objs.get(imgName, (img: any) => {
+                        if (img) {
+                            // Calculate position and size from matrix
+                            // Matrix: [scaleX, skewY, skewX, scaleY, translateX, translateY]
+                            // PDF coords are bottom-up.
+                            // The image is drawn in a 1x1 unit square at (0,0) transformed by CTM.
+                            
+                            // Approximate bounding box
+                            const x = matrix[4];
+                            const y = viewport.height - matrix[5]; // Flip Y
+                            const w = matrix[0];
+                            const h = matrix[3]; 
+                            
+                            // Create canvas to convert to base64
+                            const canvas = document.createElement('canvas');
+                            canvas.width = img.width;
+                            canvas.height = img.height;
+                            const ctx = canvas.getContext('2d');
+                            if (ctx) {
+                                // Draw image data
+                                if (img.data) {
+                                    // RGBA data
+                                    const imageData = new ImageData(new Uint8ClampedArray(img.data), img.width, img.height);
+                                    ctx.putImageData(imageData, 0, 0);
+                                } else if (img.bitmap) {
+                                    ctx.drawImage(img.bitmap, 0, 0);
+                                } else if (img.image) {
+                                    ctx.drawImage(img.image, 0, 0);
+                                }
+                                
+                                const base64 = canvas.toDataURL('image/png').split(',')[1];
+                                resolve({
+                                    type: 'image',
+                                    x: x,
+                                    y: y - Math.abs(h), // Adjust for height (PDF origin is bottom-left)
+                                    width: Math.abs(w),
+                                    height: Math.abs(h),
+                                    data: base64
+                                });
+                            } else {
+                                resolve(null);
+                            }
+                        } else {
+                            resolve(null);
+                        }
+                    });
+                }));
+            }
+        }
+
+        // Wait for all images on this page
+        images = (await Promise.all(imagePromises)).filter(img => img !== null);
+
+
+        // --- NEW: Get Annotations (Links) ---
+        const annotations = await page.getAnnotations();
+        const links = annotations.filter((a: any) => a.subtype === 'Link' && a.url);
+
+        // --- STEP 1: Map & Sort Spans ---
         const spans: Span[] = items.map(item => {
-            // PDF transform[5] is bottom-up Y. Convert to top-down.
-            // item.height is the font size roughly.
-            // item.width is text width.
+            const fontNameLower = item.fontName.toLowerCase();
+            const x = item.transform[4];
+            const y = viewport.height - item.transform[5];
+            const w = item.width;
+            const h = item.height;
+
+            // Check for Link Intersection
+            let linkUrl = null;
+            for (const link of links) {
+                const [lx, ly, ux, uy] = link.rect; // PDF coords (bottom-left origin)
+                // Convert PDF rect to Viewport rect? 
+                // item.transform[5] is PDF y (bottom-up).
+                // Let's convert item to PDF coords to check intersection.
+                const pdfY = item.transform[5];
+                
+                // Simple AABB check in PDF coords
+                // item is roughly [x, pdfY, x+w, pdfY+h] (font height)
+                // link.rect is [x1, y1, x2, y2]
+                
+                // Note: item.height is often 0 in transform, need to use font size
+                const fontSize = item.transform[0] || item.height || 11;
+                
+                // Check if item point (x, pdfY) is inside link rect
+                // We add some padding
+                if (x >= lx && x <= ux && pdfY >= ly && pdfY <= uy + fontSize) {
+                    linkUrl = link.url;
+                    break;
+                }
+            }
+
             return {
                 text: item.str,
-                x: item.transform[4],
-                y: viewport.height - item.transform[5],
-                width: item.width,
-                height: item.height,
-                fontSize: item.height || 11,
-                isBold: item.fontName.toLowerCase().includes('bold') || item.fontName.toLowerCase().includes('black'),
-                fontName: item.fontName
+                x: x,
+                y: y,
+                width: w,
+                height: h,
+                fontSize: item.transform[0] || item.height || 11,
+                isBold: fontNameLower.includes('bold') || fontNameLower.includes('black'),
+                isItalic: fontNameLower.includes('italic') || fontNameLower.includes('oblique'),
+                fontName: item.fontName,
+                link: linkUrl
             };
         });
 
-        // Group spans into visual lines based on Y coordinate
-        // We use a small tolerance because items on the same line might vary slightly in Y
-        spans.sort((a, b) => a.y - b.y);
+        // Sort: Top-down, then Left-right
+        spans.sort((a, b) => {
+            if (Math.abs(a.y - b.y) < 2) return a.x - b.x;
+            return a.y - b.y;
+        });
 
+        // --- STEP 2: Group into Visual Lines ---
+        const lines: Line[] = [];
         let currentLine: Line = { y: -9999, spans: [] };
         
         spans.forEach(span => {
-            // If spans are effectively on the same line (within 5pt vertical)
-            if (Math.abs(span.y - currentLine.y) < 5 || currentLine.y === -9999) {
+            if (Math.abs(span.y - currentLine.y) < 4 || currentLine.y === -9999) {
                 if (currentLine.y === -9999) currentLine.y = span.y;
                 currentLine.spans.push(span);
             } else {
-                // Finish current line
                 if (currentLine.spans.length > 0) {
-                    // Sort spans left-to-right
                     currentLine.spans.sort((a, b) => a.x - b.x);
-                    pageLines.push(currentLine);
+                    lines.push(currentLine);
                 }
-                // Start new line
                 currentLine = { y: span.y, spans: [span] };
             }
         });
-        // Push last line
         if (currentLine.spans.length > 0) {
             currentLine.spans.sort((a, b) => a.x - b.x);
-            pageLines.push(currentLine);
+            lines.push(currentLine);
         }
 
+        // --- STEP 3: Block Classification (Heading, Table, Paragraph, List, Header, Footer) ---
+        let currentBlock: { type: string, lines: Line[] } | null = null;
+
+        for (let idx = 0; idx < lines.length; idx++) {
+            const line = lines[idx];
+            const prevLine = idx > 0 ? lines[idx - 1] : null;
+
+            // 3a. Detect Header/Footer (based on Y position)
+            // Top 50pt or Bottom 50pt
+            const isHeader = line.y < 50;
+            const isFooter = line.y > viewport.height - 50;
+
+            // 3b. Detect Table Row (Complex Line)
+            let isComplex = false;
+            let gaps = 0;
+            for (let k = 0; k < line.spans.length - 1; k++) {
+                const gap = line.spans[k+1].x - (line.spans[k].x + line.spans[k].width);
+                if (gap > 20) gaps++;
+            }
+            if (gaps >= 2) isComplex = true;
+
+            // 3c. Detect Heading
+            const lineFontSize = Math.max(...line.spans.map(s => s.fontSize));
+            const isHeading = lineFontSize > bodyFontSize + 1;
+
+            // 3d. Detect List Item
+            // Check first span text for bullet or number pattern
+            const firstText = line.spans[0]?.text.trim() || '';
+            const isBullet = /^[\u2022\u2023\u25E6\u2043\u2219\-]/.test(firstText);
+            const isNumber = /^\d+[\.)]/.test(firstText);
+            const isList = isBullet || isNumber;
+
+            // Classification Logic
+            let type = 'paragraph';
+            if (isHeader) type = 'header';
+            else if (isFooter) type = 'footer';
+            else if (isComplex) type = 'table';
+            else if (isHeading) type = 'heading';
+            else if (isList) type = 'list_item';
+
+            // Grouping Logic
+            if (currentBlock && currentBlock.type === type) {
+                let isContinuation = false;
+                
+                if (type === 'table') {
+                    if (line.y - (prevLine?.y || 0) < 50) isContinuation = true;
+                } else if (type === 'paragraph') {
+                    const verticalGap = line.y - (prevLine?.y || 0);
+                    const lineHeight = prevLine?.spans[0].fontSize || 12;
+                    if (verticalGap < lineHeight * 2.0) isContinuation = true;
+                } else if (type === 'header' || type === 'footer') {
+                    // Group headers/footers together if close
+                     if (line.y - (prevLine?.y || 0) < 20) isContinuation = true;
+                } else if (type === 'list_item') {
+                    // List items are usually distinct blocks unless we want a single "List" block
+                    // Let's keep them separate for now to apply styles per item, 
+                    // OR group them if we want to handle a list as a unit.
+                    // Better to keep separate so we can detect start of new items.
+                    isContinuation = false; 
+                } else {
+                    if (line.y - (prevLine?.y || 0) < lineFontSize * 1.5) isContinuation = true;
+                }
+
+                if (isContinuation) {
+                    currentBlock.lines.push(line);
+                } else {
+                    pageBlocks.push(currentBlock);
+                    currentBlock = { type, lines: [line] };
+                }
+            } else {
+                if (currentBlock) pageBlocks.push(currentBlock);
+                currentBlock = { type, lines: [line] };
+            }
+        }
+        if (currentBlock) pageBlocks.push(currentBlock);
+
     } else {
-        // 2. OCR Fallback for Image-based PDFs
+        // OCR Fallback (Keep existing logic but wrap in blocks)
         console.log(`Page ${i} appears to be an image. Running OCR...`);
-        
-        // Render page to image for Tesseract
-        const canvasViewport = page.getViewport({ scale: 2.0 }); // Higher scale for better OCR
+        const canvasViewport = page.getViewport({ scale: 2.0 });
         const canvas = document.createElement('canvas');
         canvas.width = canvasViewport.width;
         canvas.height = canvasViewport.height;
@@ -107,47 +325,55 @@ export const extractTextDataForPython = async (file: File) => {
              
              try {
                  const result = await Tesseract.recognize(imageBase64, 'eng');
+                 const scaleFactor = 0.5;
                  
-                 // Tesseract returns lines with bbox.
-                 // We need to scale bbox back to 1.0 scale (since we rendered at 2.0)
-                 const scaleFactor = 0.5; // 1.0 / 2.0
-                 
-                 result.data.lines.forEach(line => {
-                     // Tesseract lines are already grouped text
-                     pageLines.push({
+                 const ocrLines: Line[] = result.data.lines.map(line => ({
+                     y: line.bbox.y0 * scaleFactor,
+                     spans: [{
+                         text: line.text.replace(/\n/g, ' '),
+                         x: line.bbox.x0 * scaleFactor,
                          y: line.bbox.y0 * scaleFactor,
-                         spans: [{
-                             text: line.text.replace(/\n/g, ''),
-                             x: line.bbox.x0 * scaleFactor,
-                             y: line.bbox.y0 * scaleFactor,
-                             width: (line.bbox.x1 - line.bbox.x0) * scaleFactor,
-                             height: (line.bbox.y1 - line.bbox.y0) * scaleFactor,
-                             fontSize: 11, // Estimate
-                             isBold: false,
-                             fontName: 'Calibri'
-                         }]
-                     });
-                 });
+                         width: (line.bbox.x1 - line.bbox.x0) * scaleFactor,
+                         height: (line.bbox.y1 - line.bbox.y0) * scaleFactor,
+                         fontSize: 11,
+                         isBold: false,
+                         isItalic: false,
+                         fontName: 'Calibri'
+                     }]
+                 }));
+                 
+                 pageBlocks.push({ type: 'paragraph', lines: ocrLines });
+
              } catch (e) {
                  console.error("OCR Failed for page " + i, e);
              }
         }
     }
     
-    // Final structure for Python
-    // We only pass what's needed
-    const simplifiedLines = pageLines.map(l => ({
-        y: l.y,
-        spans: l.spans.map(s => ({
-            text: s.text,
-            x: s.x,
-            width: s.width,
-            size: s.fontSize,
-            isBold: s.isBold
+    // Simplify for Python
+    const simplifiedBlocks = pageBlocks.map(b => ({
+        type: b.type,
+        lines: b.lines.map((l: Line) => ({
+            y: l.y,
+            spans: l.spans.map(s => ({
+                text: s.text,
+                x: s.x,
+                width: s.width,
+                size: s.fontSize,
+                isBold: s.isBold,
+                isItalic: s.isItalic,
+                fontName: s.fontName,
+                link: s.link
+            }))
         }))
     }));
 
-    pagesData.push({ lines: simplifiedLines, width: viewport.width, height: viewport.height });
+    pagesData.push({ 
+        blocks: simplifiedBlocks, 
+        images: images, 
+        width: viewport.width, 
+        height: viewport.height 
+    });
   }
   return pagesData;
 };

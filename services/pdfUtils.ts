@@ -321,12 +321,28 @@ export const addHeaderFooter = async (
   return new Blob([await pdfDoc.save()], { type: 'application/pdf' });
 };
 
-export const cropPDF = async (file: File): Promise<Blob> => {
+export const cropPDF = async (file: File, cropData?: { x: number, y: number, width: number, height: number }): Promise<Blob> => {
   const arrayBuffer = await file.arrayBuffer();
   const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   pdfDoc.getPages().forEach(page => {
-    const { width, height } = page.getSize();
-    page.setCropBox(50, 50, width - 100, height - 100);
+    // Get the current visible box (CropBox or MediaBox)
+    const currentBox = page.getCropBox() || page.getMediaBox();
+    const { x, y, width, height } = currentBox;
+    
+    if (cropData) {
+      // Calculate new crop box relative to the current visible box
+      // x, y are the bottom-left corner of the current box
+      // cropData.x is the offset from the left edge of the current box
+      // cropData.y is the offset from the top edge of the current box (UI coordinates)
+      
+      const newX = x + cropData.x;
+      const newY = y + (height - cropData.y - cropData.height);
+      
+      page.setCropBox(newX, newY, cropData.width, cropData.height);
+    } else {
+      // Default crop if no data provided (fallback)
+      page.setCropBox(x + 50, y + 50, width - 100, height - 100);
+    }
   });
   return new Blob([await pdfDoc.save()], { type: 'application/pdf' });
 };

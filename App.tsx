@@ -37,7 +37,7 @@ const Footer = () => (
 
 const App: React.FC = () => {
   return (
-    <HashRouter>
+    <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <div className="flex flex-col min-h-screen">
         <Header />
         <main className="flex-grow">

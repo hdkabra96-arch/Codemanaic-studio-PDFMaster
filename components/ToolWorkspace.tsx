@@ -6,6 +6,7 @@ import { createDocxWithPython } from '../services/pythonService';
 import { mergePDFs, splitPDF, rotatePDF, convertWordToPDF, imagesToPDF, pdfToImages, addWatermark, addPageNumbers, cropPDF, repairPDF, removeWatermarks, addHeaderFooter } from '../services/pdfUtils';
 import * as XLSX from 'xlsx';
 import { PDFEditor } from './PDFEditor';
+import { PDFCropper } from './PDFCropper';
 
 interface ToolWorkspaceProps {
   tool: ToolConfig;
@@ -184,6 +185,10 @@ export const ToolWorkspace: React.FC<ToolWorkspaceProps> = ({ tool, files, onRem
 
   if (tool.id === 'edit-pdf') {
     return <PDFEditor file={files[0]} onClose={onReset} />;
+  }
+
+  if (tool.id === 'crop') {
+    return <PDFCropper file={files[0]} onClose={onReset} />;
   }
 
   if (tool.id === 'chat-pdf') {
